@@ -1,0 +1,48 @@
+package com.example.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Light Colors (Bento Grid Theme)
+val LightPrimary = Color(0xFF005AC1)
+val LightSecondary = Color(0xFF535F70)
+val LightTertiary = Color(0xFF6B5778)
+val LightBackground = Color(0xFFFDFBFF)
+val LightSurface = Color(0xFFFFFFFF)
+val LightOnPrimary = Color(0xFFFFFFFF)
+val LightOnSecondary = Color(0xFFFFFFFF)
+val LightOnBackground = Color(0xFF1B1B1F)
+val LightOnSurface = Color(0xFF1B1B1F)
+
+val LightPrimaryContainer = Color(0xFFDBE4F2)
+val LightOnPrimaryContainer = Color(0xFF001D35)
+val LightSecondaryContainer = Color(0xFFE1E2EC)
+val LightOnSecondaryContainer = Color(0xFF44474E)
+val LightTertiaryContainer = Color(0xFFE7E0EB)
+val LightOnTertiaryContainer = Color(0xFF49454F)
+val LightSurfaceVariant = Color(0xFFF3F3FA)
+val LightOnSurfaceVariant = Color(0xFF44474E)
+val LightOutline = Color(0xFFC4C6D0)
+val LightOutlineVariant = Color(0xFFE1E2EC)
+
+// Dark Colors (Bento Grid Theme Dark Mode)
+val DarkPrimary = Color(0xFFADC6FF)
+val DarkSecondary = Color(0xFFBBC7DB)
+val DarkTertiary = Color(0xFFD6BEE4)
+val DarkBackground = Color(0xFF111318)
+val DarkSurface = Color(0xFF1B1C22)
+val DarkOnPrimary = Color(0xFF002E69)
+val DarkOnSecondary = Color(0xFF253140)
+val DarkOnBackground = Color(0xFFE3E2E6)
+val DarkOnSurface = Color(0xFFE3E2E6)
+
+val DarkPrimaryContainer = Color(0xFF004494)
+val DarkOnPrimaryContainer = Color(0xFFDBE4F2)
+val DarkSecondaryContainer = Color(0xFF3B4858)
+val DarkOnSecondaryContainer = Color(0xFFE1E2EC)
+val DarkTertiaryContainer = Color(0xFF523F5F)
+val DarkOnTertiaryContainer = Color(0xFFE7E0EB)
+val DarkSurfaceVariant = Color(0xFF21242D)
+val DarkOnSurfaceVariant = Color(0xFFC4C6D0)
+val DarkOutline = Color(0xFF8E9099)
+val DarkOutlineVariant = Color(0xFF44474E)
+
