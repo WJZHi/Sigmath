@@ -675,10 +675,8 @@ object MathSolver {
 
         if (equalsIndex != -1) {
             // It's an equation!
-            // Use original string to preserve LaTeX backslashes (e.g., \sin, \frac, \sqrt)
-            val equalsCharIndex = inputLaTeX.indexOf('=')
-            val leftLaTeX = if (equalsCharIndex >= 0) inputLaTeX.substring(0, equalsCharIndex).trim() else ""
-            val rightLaTeX = if (equalsCharIndex >= 0) inputLaTeX.substring(equalsCharIndex + 1).trim() else ""
+            val leftLaTeX = tokens.subList(0, equalsIndex).joinToString("") { it.value }
+            val rightLaTeX = tokens.subList(equalsIndex + 1, tokens.size).joinToString("") { it.value }
 
             val leftNode = MathParser.parse(leftLaTeX)
             val rightNode = MathParser.parse(rightLaTeX)
@@ -902,9 +900,8 @@ object MathSolver {
                         )
                     }
                 }
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 // E.g., Undefined variables other than x
-                SafeLog.e(TAG, "Error solving equation: $inputLaTeX", e)
                 return SolutionResult(
                     type = "equation",
                     inputLaTeX = inputLaTeX,

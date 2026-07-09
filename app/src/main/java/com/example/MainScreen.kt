@@ -737,9 +737,7 @@ fun ResultSection(
                                     )
                                 }
                                 Column(modifier = Modifier.weight(1f)) {
-                                    // If step contains Chinese characters, render as plain text
-                                    // (descriptive text, not pure LaTeX math)
-                                    if (step.any { it in '一'..'鿿' || it in '㐀'..'䶿' }) {
+                                    if (step.startsWith("原") || step.startsWith("移") || step.startsWith("因") || step.startsWith("计") || step.startsWith("两") || step.startsWith("在") || step.startsWith("精") || step.startsWith("发") || step.startsWith("解")) {
                                         Text(
                                             text = step,
                                             style = MaterialTheme.typography.bodyMedium,
