@@ -155,8 +155,18 @@ object MathParser {
                 }
                 TokenType.OPEN_PAREN -> {
                     val (groupNode, nextIdx) = parseSubExpression(tokens, i + 1, stopOnParen = true)
-                    children.add(MathNode.Parentheses(groupNode))
-                    i = if (nextIdx < tokens.size && tokens[nextIdx].type == TokenType.CLOSE_PAREN) nextIdx + 1 else nextIdx
+                    if (nextIdx < tokens.size && tokens[nextIdx].type == TokenType.CLOSE_PAREN) {
+                        children.add(MathNode.Parentheses(groupNode))
+                        i = nextIdx + 1
+                    } else {
+                        children.add(MathNode.Text("("))
+                        if (groupNode is MathNode.Row) {
+                            children.addAll(groupNode.children)
+                        } else if (groupNode !is MathNode.Text || (groupNode as MathNode.Text).text.isNotEmpty()) {
+                            children.add(groupNode)
+                        }
+                        i = nextIdx
+                    }
                 }
                 TokenType.CLOSE_PAREN -> {
                     children.add(MathNode.Text(")"))
@@ -164,8 +174,18 @@ object MathParser {
                 }
                 TokenType.OPEN_BRACKET -> {
                     val (groupNode, nextIdx) = parseSubExpression(tokens, i + 1, stopOnBracket = true)
-                    children.add(MathNode.SquareBrackets(groupNode))
-                    i = if (nextIdx < tokens.size && tokens[nextIdx].type == TokenType.CLOSE_BRACKET) nextIdx + 1 else nextIdx
+                    if (nextIdx < tokens.size && tokens[nextIdx].type == TokenType.CLOSE_BRACKET) {
+                        children.add(MathNode.SquareBrackets(groupNode))
+                        i = nextIdx + 1
+                    } else {
+                        children.add(MathNode.Text("["))
+                        if (groupNode is MathNode.Row) {
+                            children.addAll(groupNode.children)
+                        } else if (groupNode !is MathNode.Text || (groupNode as MathNode.Text).text.isNotEmpty()) {
+                            children.add(groupNode)
+                        }
+                        i = nextIdx
+                    }
                 }
                 TokenType.CLOSE_BRACKET -> {
                     children.add(MathNode.Text("]"))
@@ -186,15 +206,22 @@ object MathParser {
                             children.add(MathNode.Sqrt(content))
                             i = nextIdx
                         }
-                        "sin", "cos", "tan", "arcsin", "arccos", "arctan", "asin", "acos", "atan", "log", "ln", "abs", "floor", "ceil", "cuberoot", "max", "gcf" -> {
+                        "sin", "cos", "tan", "arcsin", "arccos", "arctan", "asin", "acos", "atan", "log", "ln", "abs", "floor", "ceil", "cuberoot", "max", "gcf", "exp", "sinh", "cosh", "tanh", "cot", "sec", "csc" -> {
                             children.add(MathNode.Text(cmd, isItalic = true))
                             i++
+                        }
+                        "left", "right" -> {
+                            i++ // skip LaTeX \left and \right alignment commands
                         }
                         "pm" -> {
                             children.add(MathNode.Operator("±"))
                             i++
                         }
-                        "times" -> {
+                        "mp" -> {
+                            children.add(MathNode.Operator("∓"))
+                            i++
+                        }
+                        "times", "cdot" -> {
                             children.add(MathNode.Operator("×"))
                             i++
                         }

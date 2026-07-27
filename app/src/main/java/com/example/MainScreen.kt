@@ -5,10 +5,16 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -47,6 +53,7 @@ fun MainScreen(
     val plotExpression = viewModel.plotExpression
 
     var showSteps by rememberSaveable { mutableStateOf(true) }
+    var isInputFocused by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -61,6 +68,12 @@ fun MainScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    isInputFocused = false
+                }
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -68,6 +81,8 @@ fun MainScreen(
             // Card 1: Active Equation Input (Bento SecondaryContainer)
             LivePreviewSection(
                 input = input,
+                isFocused = isInputFocused,
+                onFocusChange = { isInputFocused = it },
                 onClearInput = { viewModel.updateInput(TextFieldValue("")) }
             )
 
@@ -95,6 +110,7 @@ fun MainScreen(
                 OnboardingSection(onQuickEquation = { eq ->
                     viewModel.updateInput(TextFieldValue(eq, selection = TextRange(eq.length)))
                     viewModel.solveCurrentInput()
+                    isInputFocused = false
                 })
             }
 
@@ -102,18 +118,28 @@ fun MainScreen(
             if (historyList.isNotEmpty()) {
                 HistorySection(
                     history = historyList,
-                    onSelect = { viewModel.selectHistoryItem(it) },
+                    onSelect = {
+                        viewModel.selectHistoryItem(it)
+                        isInputFocused = true
+                    },
                     onDelete = { viewModel.deleteHistoryItem(it) }
                 )
             }
         }
 
-        // Custom Equation Keyboard for intuitive formula input
-        MathKeyboard(
-            fieldValue = input,
-            onValueChange = { viewModel.updateInput(it) },
-            onSolve = { viewModel.solveCurrentInput() }
-        )
+        // Custom Equation Keyboard: Shown automatically when EQUATION INPUT card is focused, hidden on loss of focus
+        AnimatedVisibility(
+            visible = isInputFocused,
+            enter = slideInVertically(initialOffsetY = { it }) + expandVertically() + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically() + fadeOut()
+        ) {
+            MathKeyboard(
+                fieldValue = input,
+                onValueChange = { viewModel.updateInput(it) },
+                onSolve = { viewModel.solveCurrentInput() },
+                onHideKeyboard = { isInputFocused = false }
+            )
+        }
     }
 }
 
@@ -183,15 +209,21 @@ fun HeaderSection(
 @Composable
 fun LivePreviewSection(
     input: TextFieldValue,
+    isFocused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
     onClearInput: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onFocusChange(true) },
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
+            containerColor = if (isFocused) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
         ),
-        border = if (input.text.isNotEmpty()) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+        border = if (isFocused) BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
+                 else if (input.text.isNotEmpty()) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                 else null
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -202,33 +234,96 @@ fun LivePreviewSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "EQUATION INPUT",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
-                )
-
-                if (input.text.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                            .clickable { onClearInput() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Clear,
-                            contentDescription = "Clear input",
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(14.dp)
-                        )
+                            .size(8.dp)
+                            .background(
+                                if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.4f),
+                                CircleShape
+                            )
+                    )
+                    Text(
+                        text = "EQUATION INPUT",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    )
+                    if (isFocused) {
+                        Box(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "正在输入",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "点击编辑",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (input.text.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                                .clickable { onClearInput() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Clear input",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                    if (isFocused) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                                .clickable { onFocusChange(false) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Close keyboard",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            // Real-time LaTeX Equation Render
+            // Real-time LaTeX Equation Render Box
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -237,14 +332,19 @@ fun LivePreviewSection(
                         color = MaterialTheme.colorScheme.surface,
                         shape = RoundedCornerShape(16.dp)
                     )
+                    .border(
+                        width = if (isFocused) 1.5.dp else 0.dp,
+                        color = if (isFocused) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else Color.Transparent,
+                        shape = RoundedCornerShape(16.dp)
+                    )
                     .padding(16.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (input.text.isEmpty()) {
                     Text(
-                        text = "键入数学问题或公式...",
+                        text = if (isFocused) "正在使用数字键盘键入公式..." else "点击此处打开键盘输入算式...",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        color = if (isFocused) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                 } else {
                     MathRenderer(
@@ -263,13 +363,16 @@ fun LivePreviewSection(
             ) {
                 Box(
                     modifier = Modifier
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(50))
+                        .background(
+                            if (isFocused) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(50)
+                        )
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = "LATEX MODE",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp
                     )
@@ -737,7 +840,8 @@ fun ResultSection(
                                     )
                                 }
                                 Column(modifier = Modifier.weight(1f)) {
-                                    if (step.startsWith("原") || step.startsWith("移") || step.startsWith("因") || step.startsWith("计") || step.startsWith("两") || step.startsWith("在") || step.startsWith("精") || step.startsWith("发") || step.startsWith("解")) {
+                                    val isChineseText = step.any { it in '\u4e00'..'\u9fa5' }
+                                    if (isChineseText) {
                                         Text(
                                             text = step,
                                             style = MaterialTheme.typography.bodyMedium,

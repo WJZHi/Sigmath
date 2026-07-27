@@ -31,6 +31,28 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.pow
 
+private fun cleanExpressionForPlotting(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    if (trimmed.contains("=")) {
+        val parts = trimmed.split("=")
+        if (parts.size == 2) {
+            val left = parts[0].trim()
+            val right = parts[1].trim()
+            val leftLower = left.lowercase(Locale.US)
+            val rightLower = right.lowercase(Locale.US)
+            if (leftLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
+                return right
+            }
+            if (rightLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
+                return left
+            }
+            return "($left) - ($right)"
+        }
+    }
+    return trimmed
+}
+
 @Composable
 fun MathPlotter(
     latexExpression: String,
@@ -45,18 +67,31 @@ fun MathPlotter(
 
     val textMeasurer = rememberTextMeasurer()
 
-    // Base scale is 40 pixels per 1 math unit at zoomFactor = 1
+    // Base scale is 50 pixels per 1 math unit at zoomFactor = 1
     val baseScale = 50f
     val pixelsPerUnitX = baseScale * zoomFactor
     val pixelsPerUnitY = baseScale * zoomFactor
 
+    // Clean expression for plotting
+    val cleanLaTeX = remember(latexExpression) {
+        cleanExpressionForPlotting(latexExpression)
+    }
+
     // Try to parse expression
-    val expr = remember(latexExpression) {
+    val expr = remember(cleanLaTeX) {
         try {
-            val node = MathParser.parse(latexExpression)
+            val node = MathParser.parse(cleanLaTeX)
             MathSolver.nodeToExpr(node)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    val canPlot = remember(expr) {
+        if (expr == null) false
+        else {
+            val vars = expr.getVariables()
+            vars.all { it in setOf("x", "e", "pi", "π") }
         }
     }
 
@@ -142,16 +177,19 @@ fun MathPlotter(
 
                 if (abs(xGrid) > 1e-5f) {
                     val labelText = if (gridSpacingMath < 1.0) String.format(Locale.US, "%.1f", xGrid) else xGrid.toInt().toString()
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = labelText,
-                        topLeft = Offset(pt.x + 4f, labelYPixel),
-                        style = TextStyle(
-                            color = axisColor.copy(alpha = 0.6f),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
+                    val textX = pt.x + 4f
+                    if (textX in 0f..(width - 10f) && labelYPixel in 0f..(height - 10f)) {
+                        drawText(
+                            textMeasurer = textMeasurer,
+                            text = labelText,
+                            topLeft = Offset(textX, labelYPixel),
+                            style = TextStyle(
+                                color = axisColor.copy(alpha = 0.6f),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
                         )
-                    )
+                    }
                 }
                 xGrid += gridSpacingMath.toFloat()
             }
@@ -177,16 +215,19 @@ fun MathPlotter(
 
                 if (abs(yGrid) > 1e-5f) {
                     val labelText = if (gridSpacingMath < 1.0) String.format(Locale.US, "%.1f", yGrid) else yGrid.toInt().toString()
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = labelText,
-                        topLeft = Offset(labelXPixel, pt.y - 18f),
-                        style = TextStyle(
-                            color = axisColor.copy(alpha = 0.6f),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
+                    val textY = pt.y - 18f
+                    if (labelXPixel in 0f..(width - 10f) && textY in 0f..(height - 10f)) {
+                        drawText(
+                            textMeasurer = textMeasurer,
+                            text = labelText,
+                            topLeft = Offset(labelXPixel, textY),
+                            style = TextStyle(
+                                color = axisColor.copy(alpha = 0.6f),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
                         )
-                    )
+                    }
                 }
                 yGrid += gridSpacingMath.toFloat()
             }
@@ -213,70 +254,69 @@ fun MathPlotter(
             }
 
             // Label origin
-            drawText(
-                textMeasurer = textMeasurer,
-                text = "0",
-                topLeft = Offset(originPixel.x + 6f, originPixel.y + 4f),
-                style = TextStyle(
-                    color = axisColor,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
+            val originTextX = originPixel.x + 6f
+            val originTextY = originPixel.y + 4f
+            if (originTextX in 0f..(width - 10f) && originTextY in 0f..(height - 10f)) {
+                drawText(
+                    textMeasurer = textMeasurer,
+                    text = "0",
+                    topLeft = Offset(originTextX, originTextY),
+                    style = TextStyle(
+                        color = axisColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
                 )
-            )
+            }
 
             // Plot the function: y = f(x)
-            if (expr != null) {
-                // Pre-check to avoid throwing exceptions 500 times per frame if the expression contains undefined variables like 'y' or 'a'
-                val canEvaluate = try {
-                    val testEnv = mapOf("x" to 1.0)
-                    expr.eval(testEnv)
-                    true
-                } catch (e: Exception) {
-                    false
-                }
+            if (canPlot && expr != null) {
+                val path = Path()
+                var first = true
+                var lastPtY = 0f
 
-                if (canEvaluate) {
-                    val path = Path()
-                    var first = true
-    
-                    // Calculate step size in pixels for a smooth curve
-                    val stepPx = 2f
-                    var px = 0f
-                    while (px <= width) {
-                        val mx = pixelToMath(px, 0f).x
-                        val my = try {
-                            val env = mapOf("x" to mx.toDouble())
-                            expr.eval(env).toFloat()
-                        } catch (e: Exception) {
-                            Float.NaN
-                        }
-    
-                        if (!my.isNaN() && !my.isInfinite() && abs(my) < 500f) {
-                            val pt = mathToPixel(mx, my)
-                            if (pt.x.isFinite() && pt.y.isFinite()) {
-                                if (first) {
-                                    path.moveTo(pt.x, pt.y)
-                                    first = false
-                                } else {
-                                    path.lineTo(pt.x, pt.y)
-                                }
-                            } else {
+                val stepPx = 1.5f
+                var px = 0f
+                while (px <= width) {
+                    val mx = pixelToMath(px, 0f).x
+                    val my = try {
+                        val env = mapOf("x" to mx.toDouble())
+                        expr.eval(env).toFloat()
+                    } catch (e: Exception) {
+                        Float.NaN
+                    }
+
+                    if (!my.isNaN() && !my.isInfinite() && abs(my) < 2000f) {
+                        val pt = mathToPixel(mx, my)
+                        if (pt.x.isFinite() && pt.y.isFinite()) {
+                            // Check for asymptote gap (sudden vertical jump across screen height)
+                            val isAsymptote = !first && abs(pt.y - lastPtY) > height * 1.5f && (pt.y * lastPtY < 0 || abs(pt.y) > height * 2f)
+                            if (isAsymptote) {
                                 first = true
                             }
+
+                            if (first) {
+                                path.moveTo(pt.x, pt.y)
+                                first = false
+                            } else {
+                                path.lineTo(pt.x, pt.y)
+                            }
+                            lastPtY = pt.y
                         } else {
-                            // Discontinuity - split the path
                             first = true
                         }
-                        px += stepPx
+                    } else {
+                        first = true
                     }
-    
-                    drawPath(
-                        path = path,
-                        color = lineColor,
-                        style = Stroke(width = 3.dp.toPx())
-                    )
+                    px += stepPx
                 }
+
+                drawPath(
+                    path = path,
+                    color = lineColor,
+                    style = Stroke(width = 3.dp.toPx())
+                )
             }
         }
 
@@ -326,7 +366,6 @@ fun MathPlotter(
                 ),
                 modifier = Modifier.size(36.dp)
             ) {
-                // Outlined minus equivalent
                 Text("-", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
             }
         }
@@ -342,8 +381,13 @@ fun MathPlotter(
                 )
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
+            val labelText = if (latexExpression.contains("=") || latexExpression.startsWith("y") || latexExpression.startsWith("f(")) {
+                latexExpression
+            } else {
+                "y = $latexExpression"
+            }
             Text(
-                text = "y = $latexExpression",
+                text = labelText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 fontWeight = FontWeight.Bold,

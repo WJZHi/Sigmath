@@ -9,6 +9,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,13 +40,17 @@ class MathViewModel(
     }
 
     var input by mutableStateOf(
-        TextFieldValue(
-            text = savedStateHandle.get<String>(KEY_INPUT_TEXT) ?: "",
-            selection = TextRange(
-                savedStateHandle.get<Int>(KEY_INPUT_SELECTION_START) ?: 0,
-                savedStateHandle.get<Int>(KEY_INPUT_SELECTION_END) ?: 0
+        run {
+            val savedText = savedStateHandle.get<String>(KEY_INPUT_TEXT) ?: ""
+            val savedStart = savedStateHandle.get<Int>(KEY_INPUT_SELECTION_START) ?: savedText.length
+            val savedEnd = savedStateHandle.get<Int>(KEY_INPUT_SELECTION_END) ?: savedText.length
+            val start = savedStart.coerceIn(0, savedText.length)
+            val end = savedEnd.coerceIn(0, savedText.length)
+            TextFieldValue(
+                text = savedText,
+                selection = TextRange(start, end)
             )
-        )
+        }
     )
         private set
 
@@ -103,15 +108,57 @@ class MathViewModel(
             initialValue = emptyList()
         )
 
+    private fun formatPlotExpression(rawInput: String): String {
+        val trimmed = rawInput.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.contains("=")) {
+            val parts = trimmed.split("=")
+            if (parts.size == 2) {
+                val left = parts[0].trim()
+                val right = parts[1].trim()
+                val leftLower = left.lowercase(Locale.US)
+                val rightLower = right.lowercase(Locale.US)
+                if (leftLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
+                    return right
+                } else if (rightLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
+                    return left
+                } else if (leftLower == "x" && rightLower == "y") {
+                    return "x"
+                } else {
+                    return "($left) - ($right)"
+                }
+            }
+        }
+        return trimmed
+    }
+
     fun updateInput(newValue: TextFieldValue) {
-        input = newValue
-        savedStateHandle[KEY_INPUT_TEXT] = newValue.text
-        savedStateHandle[KEY_INPUT_SELECTION_START] = newValue.selection.start
-        savedStateHandle[KEY_INPUT_SELECTION_END] = newValue.selection.end
+        val safeStart = newValue.selection.start.coerceIn(0, newValue.text.length)
+        val safeEnd = newValue.selection.end.coerceIn(0, newValue.text.length)
+        val safeValue = newValue.copy(selection = TextRange(safeStart, safeEnd))
+        input = safeValue
+        savedStateHandle[KEY_INPUT_TEXT] = safeValue.text
+        savedStateHandle[KEY_INPUT_SELECTION_START] = safeValue.selection.start
+        savedStateHandle[KEY_INPUT_SELECTION_END] = safeValue.selection.end
+
+        if (isPlotActive || safeValue.text.contains("x", ignoreCase = true) || safeValue.text.contains("y", ignoreCase = true)) {
+            val plotEq = formatPlotExpression(safeValue.text)
+            if (plotEq.isNotEmpty()) {
+                plotExpression = plotEq
+                savedStateHandle[KEY_PLOT_EXPRESSION] = plotEq
+            }
+        }
     }
 
     fun togglePlot() {
         isPlotActive = !isPlotActive
+        if (isPlotActive && input.text.isNotBlank()) {
+            val plotEq = formatPlotExpression(input.text)
+            if (plotEq.isNotEmpty()) {
+                plotExpression = plotEq
+                savedStateHandle[KEY_PLOT_EXPRESSION] = plotEq
+            }
+        }
         savedStateHandle[KEY_IS_PLOT_ACTIVE] = isPlotActive
     }
 
@@ -146,22 +193,15 @@ class MathViewModel(
                         )
                     )
 
-                    // Auto-enable and prepare plotter if input has 'x' variable
-                    if (rawInput.contains("x", ignoreCase = true)) {
-                        val plotEq = if (rawInput.contains("=")) {
-                            val parts = rawInput.split("=")
-                            if (parts.size == 2) {
-                                "(${parts[0]}) - (${parts[1]})"
-                            } else {
-                                rawInput
-                            }
-                        } else {
-                            rawInput
+                    // Auto-enable and prepare plotter if input has 'x' variable or 'y' function notation
+                    if (rawInput.contains("x", ignoreCase = true) || rawInput.contains("y", ignoreCase = true)) {
+                        val plotEq = formatPlotExpression(rawInput)
+                        if (plotEq.isNotEmpty()) {
+                            plotExpression = plotEq
+                            savedStateHandle[KEY_PLOT_EXPRESSION] = plotEq
+                            isPlotActive = true
+                            savedStateHandle[KEY_IS_PLOT_ACTIVE] = true
                         }
-                        plotExpression = plotEq
-                        savedStateHandle[KEY_PLOT_EXPRESSION] = plotEq
-                        isPlotActive = true
-                        savedStateHandle[KEY_IS_PLOT_ACTIVE] = true
                     }
                 }
             } catch (e: Throwable) {

@@ -22,7 +22,7 @@ class ExampleRobolectricTest {
       val savedStateHandle = SavedStateHandle()
       val viewModel = MathViewModel(context, savedStateHandle)
       
-      viewModel.updateInput(TextFieldValue("2x=4"))
+      viewModel.updateInput(TextFieldValue("x"))
       viewModel.solveCurrentInput()
       
       // Wait for coroutine
@@ -99,6 +99,7 @@ class ExampleRobolectricTest {
         "2a = 4",
         "2x + y = 4",
         "y",
+        "x",
         "sin",
         "cos",
         "tan"

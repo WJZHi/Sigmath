@@ -49,6 +49,13 @@ sealed class Expr {
                     "atan", "arctan" -> atan(v)
                     "log" -> log10(v)
                     "ln" -> ln(v)
+                    "exp" -> exp(v)
+                    "sinh" -> sinh(v)
+                    "cosh" -> cosh(v)
+                    "tanh" -> tanh(v)
+                    "cot" -> 1.0 / tan(v)
+                    "sec" -> 1.0 / cos(v)
+                    "csc" -> 1.0 / sin(v)
                     "abs" -> abs(v)
                     "floor" -> floor(v)
                     "ceil" -> ceil(v)
@@ -58,6 +65,21 @@ sealed class Expr {
                 }
             }
             is Neg -> -expr.eval(env)
+        }
+    }
+
+    fun getVariables(): Set<String> {
+        return when (this) {
+            is Num -> emptySet()
+            is Var -> setOf(name)
+            is Add -> left.getVariables() + right.getVariables()
+            is Sub -> left.getVariables() + right.getVariables()
+            is Mul -> left.getVariables() + right.getVariables()
+            is Div -> left.getVariables() + right.getVariables()
+            is Pow -> base.getVariables() + exp.getVariables()
+            is Sqrt -> expr.getVariables()
+            is Fn -> arg.getVariables()
+            is Neg -> expr.getVariables()
         }
     }
 
@@ -142,27 +164,35 @@ object MathSolver {
         return Pair(outside, inside)
     }
 
+    private fun parseTextToExpr(txtRaw: String): Expr? {
+        val txt = txtRaw.trim()
+        if (txt.isEmpty()) return null
+        val d = txt.toDoubleOrNull()
+        if (d != null) return Expr.Num(d)
+        if (txt == "pi" || txt == "π") return Expr.Num(PI)
+        if (txt == "e") return Expr.Num(E)
+        if (txt.length == 1 && txt[0].isLetter()) return Expr.Var(txt)
+        if (txt.startsWith("-") && txt.length > 1) {
+            val sub = parseTextToExpr(txt.substring(1))
+            if (sub != null) return Expr.Neg(sub)
+        }
+        val numLetterMatch = Regex("^([0-9.]+)([a-zA-Z]+)$").find(txt)
+        if (numLetterMatch != null) {
+            val numVal = numLetterMatch.groupValues[1].toDoubleOrNull()
+            val varStr = numLetterMatch.groupValues[2]
+            if (numVal != null && varStr.isNotEmpty()) {
+                val varExpr = if (varStr.length == 1) Expr.Var(varStr) else Expr.Var(varStr)
+                return Expr.Mul(Expr.Num(numVal), varExpr)
+            }
+        }
+        return Expr.Var(txt)
+    }
+
     // Convert MathNode to Expr
     fun nodeToExpr(node: MathNode): Expr? {
         return try {
             when (node) {
-                is MathNode.Text -> {
-                    val txt = node.text.trim()
-                    if (txt.isEmpty()) return null
-                    val d = txt.toDoubleOrNull()
-                    if (d != null) {
-                        Expr.Num(d)
-                    } else if (txt == "pi" || txt == "π") {
-                        Expr.Num(PI)
-                    } else if (txt == "e") {
-                        Expr.Num(E)
-                    } else if (txt.length == 1 && txt[0].isLetter()) {
-                        Expr.Var(txt)
-                    } else {
-                        // Might be a sequence inside text or variable
-                        Expr.Var(txt)
-                    }
-                }
+                is MathNode.Text -> parseTextToExpr(node.text)
                 is MathNode.Operator -> null // Operators are handled at Row-level parsing
                 is MathNode.SpecialSymbol -> {
                     when (node.symbol) {
@@ -225,7 +255,7 @@ object MathSolver {
                 }
                 is MathNode.Text -> {
                     val txt = node.text.trim()
-                    if (txt in listOf("sin", "cos", "tan", "arcsin", "arccos", "arctan", "asin", "acos", "atan", "log", "ln", "abs", "floor", "ceil", "cuberoot")) {
+                    if (txt in listOf("sin", "cos", "tan", "arcsin", "arccos", "arctan", "asin", "acos", "atan", "log", "ln", "exp", "sinh", "cosh", "tanh", "cot", "sec", "csc", "abs", "floor", "ceil", "cuberoot")) {
                         // Function. Parse its argument
                         if (i + 1 < nodes.size) {
                             val argNode = nodes[i + 1]
@@ -691,6 +721,50 @@ object MathSolver {
                     steps = listOf("无法解析等式的左右两侧。"),
                     exactResultLaTeX = "\\text{Error}",
                     decimalResult = "Parsing error"
+                )
+            }
+
+            val leftVars = leftExpr.getVariables()
+            val rightVars = rightExpr.getVariables()
+            val allVars = (leftVars + rightVars) - setOf("e", "pi", "π")
+
+            // Check if equation involves 'y' (2D function equation)
+            if ("y" in allVars) {
+                val steps = mutableListOf<String>()
+                steps.add("原方程: $leftLaTeX = $rightLaTeX")
+
+                val exactStr: String
+                val decStr: String
+
+                if (leftExpr is Expr.Var && leftExpr.name == "y" && "y" !in rightVars) {
+                    steps.add("该方程显式给出了因变量 \$y\$ 关于自变量 \$x\$ 的函数解析式:")
+                    steps.add("y = $rightLaTeX")
+                    exactStr = "y = $rightLaTeX"
+                    decStr = "y = $rightLaTeX"
+                } else if (rightExpr is Expr.Var && rightExpr.name == "y" && "y" !in leftVars) {
+                    steps.add("交换左右两端，解出 \$y\$ 关于 \$x\$ 的函数关系:")
+                    steps.add("y = $leftLaTeX")
+                    exactStr = "y = $leftLaTeX"
+                    decStr = "y = $leftLaTeX"
+                } else if (leftExpr is Expr.Var && leftExpr.name == "x" && rightExpr is Expr.Var && rightExpr.name == "y") {
+                    steps.add("交换左右两端，解出 \$y\$ 关于 \$x\$ 的函数关系:")
+                    steps.add("y = x")
+                    exactStr = "y = x"
+                    decStr = "y = x"
+                } else {
+                    steps.add("此为包含自变量 \$x\$ 与因变量 \$y\$ 的函数图像方程。")
+                    steps.add("已在下方笛卡尔坐标系中绘制出其对应曲线。")
+                    exactStr = "y = f(x)"
+                    decStr = "Function plot generated"
+                }
+
+                return SolutionResult(
+                    type = "equation",
+                    inputLaTeX = inputLaTeX,
+                    steps = steps,
+                    exactResultLaTeX = exactStr,
+                    decimalResult = decStr,
+                    geometricInterpretation = "在几何上，该方程在二维笛卡尔直角坐标系中对应一条平面曲线。已自动生成可视化函数图像。"
                 )
             }
 

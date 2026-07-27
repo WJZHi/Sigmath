@@ -1,5 +1,5 @@
 {
-  "name": "Math Solver",
+  "name": "Sigmath",
   "description": "A powerful offline Math Solver & Plotter with custom mathematical keyboards, fraction and radical solutions, interactive function graphing, and beautiful native Jetpack Compose LaTeX rendering.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
