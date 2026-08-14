@@ -3,20 +3,36 @@ package com.example
 import android.util.Log
 
 enum class TokenType {
-    COMMAND, NUMBER, LETTER, CHAR, OPEN_BRACE, CLOSE_BRACE, OPEN_PAREN, CLOSE_PAREN, OPEN_BRACKET, CLOSE_BRACKET, POWER, SUBSCRIPT, OPERATOR
+    COMMAND, NUMBER, LETTER, CHAR, OPEN_BRACE, CLOSE_BRACE, OPEN_PAREN, CLOSE_PAREN, OPEN_BRACKET, CLOSE_BRACKET, POWER, SUBSCRIPT, OPERATOR, CURSOR
 }
 
-data class Token(val type: TokenType, val value: String) {
+data class Token(
+    val type: TokenType,
+    val value: String,
+    val startIndex: Int = -1,
+    val endIndex: Int = -1
+) {
     override fun toString(): String = "$type($value)"
 }
 
 object MathParser {
     private const val TAG = "MathParser"
 
-    fun tokenize(input: String): List<Token> {
+    fun tokenize(input: String, cursorPosition: Int? = null): List<Token> {
         val tokens = mutableListOf<Token>()
         var i = 0
+        var insertedCursor = false
+
+        fun checkAndInsertCursor() {
+            if (cursorPosition != null && !insertedCursor && i >= cursorPosition) {
+                tokens.add(Token(TokenType.CURSOR, "|", cursorPosition, cursorPosition))
+                insertedCursor = true
+            }
+        }
+
         while (i < input.length) {
+            checkAndInsertCursor()
+            val startTokenIdx = i
             val c = input[i]
             when {
                 c.isWhitespace() -> {
@@ -24,7 +40,7 @@ object MathParser {
                 }
                 c == '\\' -> {
                     if (i + 1 < input.length && input[i + 1] == '\\') {
-                        tokens.add(Token(TokenType.OPERATOR, "\\\\"))
+                        tokens.add(Token(TokenType.OPERATOR, "\\\\", startTokenIdx, startTokenIdx + 2))
                         i += 2
                     } else {
                         val sb = StringBuilder()
@@ -35,72 +51,92 @@ object MathParser {
                         }
                         val cmd = sb.toString()
                         if (cmd.isNotEmpty()) {
-                            tokens.add(Token(TokenType.COMMAND, cmd))
+                            tokens.add(Token(TokenType.COMMAND, cmd, startTokenIdx, i))
                         }
                     }
                 }
                 c.isDigit() -> {
-                    val sb = StringBuilder()
-                    while (i < input.length && (input[i].isDigit() || input[i] == '.')) {
-                        sb.append(input[i])
-                        i++
-                    }
-                    tokens.add(Token(TokenType.NUMBER, sb.toString()))
+                    tokens.add(Token(TokenType.NUMBER, c.toString(), startTokenIdx, startTokenIdx + 1))
+                    i++
                 }
                 c == '{' -> {
-                    tokens.add(Token(TokenType.OPEN_BRACE, "{"))
+                    tokens.add(Token(TokenType.OPEN_BRACE, "{", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == '}' -> {
-                    tokens.add(Token(TokenType.CLOSE_BRACE, "}"))
+                    tokens.add(Token(TokenType.CLOSE_BRACE, "}", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == '(' -> {
-                    tokens.add(Token(TokenType.OPEN_PAREN, "("))
+                    tokens.add(Token(TokenType.OPEN_PAREN, "(", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == ')' -> {
-                    tokens.add(Token(TokenType.CLOSE_PAREN, ")"))
+                    tokens.add(Token(TokenType.CLOSE_PAREN, ")", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == '[' -> {
-                    tokens.add(Token(TokenType.OPEN_BRACKET, "["))
+                    tokens.add(Token(TokenType.OPEN_BRACKET, "[", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == ']' -> {
-                    tokens.add(Token(TokenType.CLOSE_BRACKET, "]"))
+                    tokens.add(Token(TokenType.CLOSE_BRACKET, "]", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == '^' -> {
-                    tokens.add(Token(TokenType.POWER, "^"))
+                    tokens.add(Token(TokenType.POWER, "^", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c == '_' -> {
-                    tokens.add(Token(TokenType.SUBSCRIPT, "_"))
+                    tokens.add(Token(TokenType.SUBSCRIPT, "_", startTokenIdx, startTokenIdx + 1))
                     i++
                 }
-                c in "+-=*/<>&" || c == '÷' || c == '×' || c == '±' || c == '!' -> {
-                    tokens.add(Token(TokenType.OPERATOR, c.toString()))
+                c in "+-=*/<>&≤≥≠≈≪≫%" || c == '÷' || c == '×' || c == '±' || c == '!' -> {
+                    tokens.add(Token(TokenType.OPERATOR, c.toString(), startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 c.isLetter() -> {
-                    tokens.add(Token(TokenType.LETTER, c.toString()))
+                    tokens.add(Token(TokenType.LETTER, c.toString(), startTokenIdx, startTokenIdx + 1))
                     i++
                 }
                 else -> {
-                    tokens.add(Token(TokenType.CHAR, c.toString()))
+                    tokens.add(Token(TokenType.CHAR, c.toString(), startTokenIdx, startTokenIdx + 1))
                     i++
                 }
             }
         }
+        checkAndInsertCursor()
         return tokens
     }
 
-    fun parse(input: String): MathNode {
-        val tokens = tokenize(input)
+    fun parse(input: String, cursorPosition: Int? = null): MathNode {
+        val tokens = tokenize(input, cursorPosition)
         SafeLog.d(TAG, "Parsing input: $input, tokens: $tokens")
         val (node, _) = parseSubExpression(tokens, 0)
         return node
+    }
+
+    fun parseTokens(tokens: List<Token>): MathNode {
+        SafeLog.d(TAG, "Parsing tokens: $tokens")
+        val (node, _) = parseSubExpression(tokens, 0)
+        return node
+    }
+
+    fun tokensToLaTeX(tokens: List<Token>): String {
+        val sb = StringBuilder()
+        for (i in tokens.indices) {
+            val t = tokens[i]
+            if (t.type == TokenType.CURSOR) continue
+            if (t.type == TokenType.COMMAND) {
+                sb.append("\\").append(t.value)
+                if (i + 1 < tokens.size && tokens[i + 1].type == TokenType.LETTER) {
+                    sb.append(" ")
+                }
+            } else {
+                sb.append(t.value)
+            }
+        }
+        return sb.toString()
     }
 
     private fun parseSubExpression(
@@ -127,20 +163,24 @@ object MathParser {
             }
 
             when (token.type) {
+                TokenType.CURSOR -> {
+                    children.add(MathNode.Cursor)
+                    i++
+                }
                 TokenType.NUMBER -> {
-                    children.add(MathNode.Text(token.value))
+                    children.add(MathNode.Text(token.value, startIndex = token.startIndex, endIndex = token.endIndex))
                     i++
                 }
                 TokenType.LETTER -> {
-                    children.add(MathNode.Text(token.value, isItalic = true))
+                    children.add(MathNode.Text(token.value, isItalic = true, startIndex = token.startIndex, endIndex = token.endIndex))
                     i++
                 }
                 TokenType.OPERATOR -> {
-                    children.add(MathNode.Operator(token.value))
+                    children.add(MathNode.Operator(token.value, startIndex = token.startIndex, endIndex = token.endIndex))
                     i++
                 }
                 TokenType.CHAR -> {
-                    children.add(MathNode.Text(token.value))
+                    children.add(MathNode.Text(token.value, startIndex = token.startIndex, endIndex = token.endIndex))
                     i++
                 }
                 TokenType.OPEN_BRACE -> {
@@ -201,10 +241,79 @@ object MathParser {
                             children.add(MathNode.Fraction(num, den))
                             i = next2
                         }
-                        "sqrt" -> {
-                            val (content, nextIdx) = parseArg(tokens, i + 1)
-                            children.add(MathNode.Sqrt(content))
+                        "sqrt", "root" -> {
+                            if (i + 1 < tokens.size && tokens[i + 1].type == TokenType.OPEN_BRACKET) {
+                                val (indexNode, next1) = parseSubExpression(tokens, i + 2, stopOnBracket = true)
+                                val idxAfterBracket = if (next1 < tokens.size && tokens[next1].type == TokenType.CLOSE_BRACKET) next1 + 1 else next1
+                                val (content, next2) = parseArg(tokens, idxAfterBracket)
+                                children.add(MathNode.Sqrt(content, indexNode))
+                                i = next2
+                            } else {
+                                val (content, nextIdx) = parseArg(tokens, i + 1)
+                                children.add(MathNode.Sqrt(content))
+                                i = nextIdx
+                            }
+                        }
+                        "quad" -> {
+                            children.add(MathNode.Text("  "))
+                            i++
+                        }
+                        "qquad" -> {
+                            children.add(MathNode.Text("    "))
+                            i++
+                        }
+                        "text", "mathbb", "mathrm", "mathbf", "mathsf", "mathcal" -> {
+                            val (arg, nextIdx) = parseArg(tokens, i + 1)
+                            children.add(clearItalic(arg))
                             i = nextIdx
+                        }
+                        "in" -> {
+                            children.add(MathNode.Operator("∈"))
+                            i++
+                        }
+                        "notin" -> {
+                            children.add(MathNode.Operator("∉"))
+                            i++
+                        }
+                        "varnothing" -> {
+                            children.add(MathNode.SpecialSymbol("∅"))
+                            i++
+                        }
+                        "approx" -> {
+                            children.add(MathNode.Operator("≈"))
+                            i++
+                        }
+                        "neq" -> {
+                            children.add(MathNode.Operator("≠"))
+                            i++
+                        }
+                        "leq", "le" -> {
+                            children.add(MathNode.Operator("≤"))
+                            i++
+                        }
+                        "geq", "ge" -> {
+                            children.add(MathNode.Operator("≥"))
+                            i++
+                        }
+                        "ll" -> {
+                            children.add(MathNode.Operator("≪"))
+                            i++
+                        }
+                        "gg" -> {
+                            children.add(MathNode.Operator("≫"))
+                            i++
+                        }
+                        "Delta" -> {
+                            children.add(MathNode.SpecialSymbol("Δ"))
+                            i++
+                        }
+                        "delta" -> {
+                            children.add(MathNode.SpecialSymbol("δ"))
+                            i++
+                        }
+                        "to" -> {
+                            children.add(MathNode.Operator("→"))
+                            i++
                         }
                         "sin", "cos", "tan", "arcsin", "arccos", "arctan", "asin", "acos", "atan", "log", "ln", "abs", "floor", "ceil", "cuberoot", "max", "gcf", "exp", "sinh", "cosh", "tanh", "cot", "sec", "csc" -> {
                             children.add(MathNode.Text(cmd, isItalic = true))
@@ -227,6 +336,10 @@ object MathParser {
                         }
                         "div" -> {
                             children.add(MathNode.Operator("÷"))
+                            i++
+                        }
+                        "bmod", "mod" -> {
+                            children.add(MathNode.Operator("%"))
                             i++
                         }
                         "pi" -> {
@@ -414,34 +527,64 @@ object MathParser {
         if (startIndex >= tokens.size) {
             return Pair(MathNode.Text(""), startIndex)
         }
-        val token = tokens[startIndex]
-        return if (token.type == TokenType.OPEN_BRACE) {
-            val (node, nextIdx) = parseSubExpression(tokens, startIndex + 1, stopOnBrace = true)
-            val finalIdx = if (nextIdx < tokens.size && tokens[nextIdx].type == TokenType.CLOSE_BRACE) nextIdx + 1 else nextIdx
-            Pair(node, finalIdx)
+
+        var curr = startIndex
+        var hasLeadingCursor = false
+        if (tokens[curr].type == TokenType.CURSOR) {
+            hasLeadingCursor = true
+            curr++
+            if (curr >= tokens.size) {
+                return Pair(MathNode.Cursor, curr)
+            }
+        }
+
+        val token = tokens[curr]
+        val (node, nextIdx) = if (token.type == TokenType.OPEN_BRACE) {
+            val (subNode, nIdx) = parseSubExpression(tokens, curr + 1, stopOnBrace = true)
+            val finalIdx = if (nIdx < tokens.size && tokens[nIdx].type == TokenType.CLOSE_BRACE) nIdx + 1 else nIdx
+            Pair(subNode, finalIdx)
         } else {
-            // Parse single token as argument
-            val node = when (token.type) {
-                TokenType.NUMBER -> MathNode.Text(token.value)
-                TokenType.LETTER -> MathNode.Text(token.value, isItalic = true)
-                TokenType.OPERATOR -> MathNode.Operator(token.value)
-                TokenType.CHAR -> MathNode.Text(token.value)
+            val singleNode = when (token.type) {
+                TokenType.NUMBER -> MathNode.Text(token.value, startIndex = token.startIndex, endIndex = token.endIndex)
+                TokenType.LETTER -> MathNode.Text(token.value, isItalic = true, startIndex = token.startIndex, endIndex = token.endIndex)
+                TokenType.OPERATOR -> MathNode.Operator(token.value, startIndex = token.startIndex, endIndex = token.endIndex)
+                TokenType.CHAR -> MathNode.Text(token.value, startIndex = token.startIndex, endIndex = token.endIndex)
                 TokenType.COMMAND -> {
                     when (token.value) {
-                        "pi" -> MathNode.SpecialSymbol("π")
-                        "alpha" -> MathNode.SpecialSymbol("α")
-                        "beta" -> MathNode.SpecialSymbol("β")
-                        "theta" -> MathNode.SpecialSymbol("θ")
-                        "gamma" -> MathNode.SpecialSymbol("γ")
-                        "tau" -> MathNode.SpecialSymbol("τ")
-                        "mu" -> MathNode.SpecialSymbol("μ")
-                        "infty" -> MathNode.SpecialSymbol("∞")
-                        else -> MathNode.Text("\\${token.value}")
+                        "pi" -> MathNode.SpecialSymbol("π", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "alpha" -> MathNode.SpecialSymbol("α", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "beta" -> MathNode.SpecialSymbol("β", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "theta" -> MathNode.SpecialSymbol("θ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "gamma" -> MathNode.SpecialSymbol("γ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "tau" -> MathNode.SpecialSymbol("τ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "mu" -> MathNode.SpecialSymbol("μ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "infty" -> MathNode.SpecialSymbol("∞", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "Delta" -> MathNode.SpecialSymbol("Δ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "delta" -> MathNode.SpecialSymbol("δ", startIndex = token.startIndex, endIndex = token.endIndex)
+                        "varnothing" -> MathNode.SpecialSymbol("∅", startIndex = token.startIndex, endIndex = token.endIndex)
+                        else -> MathNode.Text("\\${token.value}", startIndex = token.startIndex, endIndex = token.endIndex)
                     }
                 }
-                else -> MathNode.Text(token.value)
+                TokenType.CURSOR -> MathNode.Cursor
+                else -> MathNode.Text(token.value, startIndex = token.startIndex, endIndex = token.endIndex)
             }
-            Pair(node, startIndex + 1)
+            Pair(singleNode, curr + 1)
         }
+
+        return if (hasLeadingCursor) {
+            val combined = when (node) {
+                is MathNode.Row -> MathNode.Row(listOf(MathNode.Cursor) + node.children)
+                else -> MathNode.Row(listOf(MathNode.Cursor, node))
+            }
+            Pair(combined, nextIdx)
+        } else {
+            Pair(node, nextIdx)
+        }
+    }
+
+    private fun clearItalic(node: MathNode): MathNode = when (node) {
+        is MathNode.Text -> node.copy(isItalic = false)
+        is MathNode.Row -> MathNode.Row(node.children.map { clearItalic(it) })
+        else -> node
     }
 }

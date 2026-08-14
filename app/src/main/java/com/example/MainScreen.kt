@@ -1,5 +1,8 @@
 package com.example
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -11,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,12 +23,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -39,21 +50,72 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 
 @Composable
 fun MainScreen(
     viewModel: MathViewModel,
+    onOpenHistory: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val input = viewModel.input
     val solutionResult by viewModel.solutionResult.collectAsStateWithLifecycle()
-    val historyList by viewModel.historyList.collectAsStateWithLifecycle()
+    val hasResult = solutionResult != null
     val isPlotActive = viewModel.isPlotActive
     val plotExpression = viewModel.plotExpression
 
     var showSteps by rememberSaveable { mutableStateOf(true) }
-    var isInputFocused by rememberSaveable { mutableStateOf(false) }
+    var isInputFocused by rememberSaveable { mutableStateOf(true) }
+
+    var showPasteEditDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingPasteText by rememberSaveable { mutableStateOf("") }
+
+    val handleSmartPaste: () -> Unit = {
+        val clipboardText = ClipboardUtils.getClipboardText(context)
+        if (clipboardText.isNullOrBlank()) {
+            Toast.makeText(context, "剪贴板为空", Toast.LENGTH_SHORT).show()
+        } else {
+            val classification = SmartMathClipboard.classify(clipboardText)
+            when (classification) {
+                MathTextClassification.NON_MATH -> {
+                    Toast.makeText(context, "剪贴板内容不是有效算式，无法粘贴", Toast.LENGTH_LONG).show()
+                }
+                MathTextClassification.PURE_MATH -> {
+                    val sanitized = SmartMathClipboard.sanitize(clipboardText)
+                    viewModel.insertTextAtCursor(sanitized)
+                    Toast.makeText(context, "已直接粘贴算式", Toast.LENGTH_SHORT).show()
+                }
+                MathTextClassification.NOISY_OR_INVALID_MATH -> {
+                    pendingPasteText = clipboardText
+                    showPasteEditDialog = true
+                }
+            }
+        }
+    }
+
+    val handleCopy: () -> Unit = {
+        if (input.text.isNotEmpty()) {
+            ClipboardUtils.copyToClipboard(context, input.text, "LaTeX")
+            Toast.makeText(context, "已复制公式", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "输入框为空，无复制内容", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 如果用户没有生成结果，则强制调用键盘，激活输入框
+    LaunchedEffect(hasResult) {
+        if (!hasResult) {
+            isInputFocused = true
+        }
+    }
+
+    val effectiveKeyboardVisible = if (!hasResult) true else isInputFocused
 
     Column(
         modifier = modifier
@@ -61,7 +123,10 @@ fun MainScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         // Bento Style Top App Header
-        HeaderSection(onClearHistory = { viewModel.clearHistory() })
+        HeaderSection(
+            onOpenHistory = onOpenHistory,
+            onOpenSettings = onOpenSettings
+        )
 
         // Scrollable Workspace Layout containing our beautiful Bento Cards
         Column(
@@ -72,7 +137,9 @@ fun MainScreen(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-                    isInputFocused = false
+                    if (hasResult) {
+                        isInputFocused = false
+                    }
                 }
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -81,22 +148,20 @@ fun MainScreen(
             // Card 1: Active Equation Input (Bento SecondaryContainer)
             LivePreviewSection(
                 input = input,
-                isFocused = isInputFocused,
-                onFocusChange = { isInputFocused = it },
-                onClearInput = { viewModel.updateInput(TextFieldValue("")) }
+                isFocused = effectiveKeyboardVisible,
+                hasResult = hasResult,
+                onFocusChange = { focus ->
+                    if (hasResult) {
+                        isInputFocused = focus
+                    } else {
+                        isInputFocused = true
+                    }
+                },
+                onClearInput = { viewModel.updateInput(TextFieldValue("")) },
+                onValueChange = { viewModel.updateInput(it) },
+                onCopyRequest = handleCopy,
+                onPasteRequest = handleSmartPaste
             )
-
-            // Card 2: Interactive Function Plotter (Dynamic Cartesian Plot)
-            AnimatedVisibility(
-                visible = isPlotActive,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                PlotterSection(
-                    expression = plotExpression,
-                    onClosePlot = { viewModel.togglePlot() }
-                )
-            }
 
             // Bento Solved Content: Spans when calculations are completed successfully
             if (solutionResult != null) {
@@ -105,31 +170,23 @@ fun MainScreen(
                     showSteps = showSteps,
                     onToggleSteps = { showSteps = !showSteps }
                 )
-            } else {
-                // Friendly Onboarding / Examples in Bento Grid Card List
-                OnboardingSection(onQuickEquation = { eq ->
-                    viewModel.updateInput(TextFieldValue(eq, selection = TextRange(eq.length)))
-                    viewModel.solveCurrentInput()
-                    isInputFocused = false
-                })
             }
 
-            // Calculation History Section
-            if (historyList.isNotEmpty()) {
-                HistorySection(
-                    history = historyList,
-                    onSelect = {
-                        viewModel.selectHistoryItem(it)
-                        isInputFocused = true
-                    },
-                    onDelete = { viewModel.deleteHistoryItem(it) }
+            // Card 2: Interactive Function Plotter (Dynamic Cartesian Plot)
+            AnimatedVisibility(
+                visible = isPlotActive,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                PlotterSection(
+                    expression = plotExpression
                 )
             }
         }
 
         // Custom Equation Keyboard: Shown automatically when EQUATION INPUT card is focused, hidden on loss of focus
         AnimatedVisibility(
-            visible = isInputFocused,
+            visible = effectiveKeyboardVisible,
             enter = slideInVertically(initialOffsetY = { it }) + expandVertically() + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically() + fadeOut()
         ) {
@@ -137,19 +194,43 @@ fun MainScreen(
                 fieldValue = input,
                 onValueChange = { viewModel.updateInput(it) },
                 onSolve = { viewModel.solveCurrentInput() },
-                onHideKeyboard = { isInputFocused = false }
+                canHideKeyboard = hasResult,
+                onHideKeyboard = {
+                    if (hasResult) {
+                        isInputFocused = false
+                    }
+                },
+                onPasteRequest = handleSmartPaste
             )
         }
+
+        if (!effectiveKeyboardVisible) {
+            Spacer(modifier = Modifier.navigationBarsPadding())
+        }
+    }
+
+    if (showPasteEditDialog) {
+        PasteEditDialog(
+            initialText = pendingPasteText,
+            onDismiss = { showPasteEditDialog = false },
+            onConfirmPaste = { editedText ->
+                viewModel.insertTextAtCursor(editedText)
+                showPasteEditDialog = false
+                Toast.makeText(context, "已粘贴算式", Toast.LENGTH_SHORT).show()
+            }
+        )
     }
 }
 
 @Composable
 fun HeaderSection(
-    onClearHistory: () -> Unit
+    onOpenHistory: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -158,49 +239,45 @@ fun HeaderSection(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Box(
+            // Top-left history button
+            IconButton(
+                onClick = onOpenHistory,
                 modifier = Modifier
-                    .size(40.dp)
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
+                    .size(42.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(14.dp)
+                    )
             ) {
                 Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.fillMaxSize()
+                    imageVector = Icons.Default.History,
+                    contentDescription = "查看历史记录",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp)
                 )
             }
-            Column {
-                Text(
-                    text = "Math Solver",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Bento Math Engine • Offline",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                )
-            }
+            Text(
+                text = "Sigmath",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
         }
 
         IconButton(
-            onClick = onClearHistory,
+            onClick = onOpenSettings,
             modifier = Modifier
-                .size(40.dp)
+                .size(42.dp)
                 .background(
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 )
         ) {
             Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Clear all history",
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(20.dp)
+                imageVector = Icons.Default.Settings,
+                contentDescription = "设置",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
             )
         }
     }
@@ -210,24 +287,27 @@ fun HeaderSection(
 fun LivePreviewSection(
     input: TextFieldValue,
     isFocused: Boolean,
+    hasResult: Boolean = true,
     onFocusChange: (Boolean) -> Unit,
-    onClearInput: () -> Unit
+    onClearInput: () -> Unit,
+    onValueChange: (TextFieldValue) -> Unit = {},
+    onCopyRequest: () -> Unit = {},
+    onPasteRequest: () -> Unit = {}
 ) {
-    Card(
+    var showFloatingMenu by remember { mutableStateOf(false) }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onFocusChange(true) },
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isFocused) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
-        ),
-        border = if (isFocused) BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
-                 else if (input.text.isNotEmpty()) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                 else null
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onFocusChange(true) }
+            .padding(horizontal = 4.dp, vertical = 4.dp)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -240,162 +320,102 @@ fun LivePreviewSection(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(8.dp)
+                            .size(7.dp)
                             .background(
-                                if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.4f),
+                                if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                 CircleShape
                             )
                     )
                     Text(
-                        text = "EQUATION INPUT",
+                        text = if (isFocused) "输入公式" else "公式",
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    )
-                    if (isFocused) {
-                        Box(
-                            modifier = Modifier
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "正在输入",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "点击编辑",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (input.text.isNotEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                                .clickable { onClearInput() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear input",
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                    if (isFocused) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                                .clickable { onFocusChange(false) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Close keyboard",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Real-time LaTeX Equation Render Box
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 72.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    .border(
-                        width = if (isFocused) 1.5.dp else 0.dp,
-                        color = if (isFocused) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else Color.Transparent,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    .padding(16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                if (input.text.isEmpty()) {
-                    Text(
-                        text = if (isFocused) "正在使用数字键盘键入公式..." else "点击此处打开键盘输入算式...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (isFocused) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                } else {
-                    MathRenderer(
-                        latex = input.text,
-                        fontSize = 24.sp,
-                        textColor = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            // Bottom stats & format badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .background(
-                            if (isFocused) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(50)
-                        )
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "LATEX MODE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isFocused) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp
                     )
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (input.text.isEmpty()) "Empty" else "Raw: ${input.text}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f),
-                        maxLines = 1,
-                        modifier = Modifier.widthIn(max = 140.dp)
-                    )
+                if (isFocused && hasResult) {
+                    IconButton(
+                        onClick = { onFocusChange(false) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "收起键盘",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
 
-                    Text(
-                        text = "Pos: ${input.selection.start}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f)
+            // Real-time LaTeX Equation Render Box (Borderless)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 60.dp)
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (showFloatingMenu) {
+                    EquationFloatingActionToolbar(
+                        canCopy = input.text.isNotEmpty(),
+                        onCopy = {
+                            showFloatingMenu = false
+                            onCopyRequest()
+                        },
+                        onPaste = {
+                            showFloatingMenu = false
+                            onPasteRequest()
+                        },
+                        onDismissRequest = {
+                            showFloatingMenu = false
+                        }
+                    )
+                }
+
+                if (input.text.isEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        onFocusChange(true)
+                                    },
+                                    onLongPress = {
+                                        onFocusChange(true)
+                                        showFloatingMenu = true
+                                    }
+                                )
+                            }
+                    ) {
+                        if (isFocused) {
+                            BlinkingCursor(fontSize = 24.sp, color = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text(
+                            text = if (isFocused) "输入算式或方程..." else "点击此处输入算式...",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontSize = 22.sp),
+                            color = if (isFocused) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                } else {
+                    MathRenderer(
+                        latex = input.text,
+                        fontSize = 26.sp,
+                        textColor = MaterialTheme.colorScheme.onSurface,
+                        cursorPosition = input.selection.start,
+                        isFocused = isFocused,
+                        onCursorPositionChange = { newPos ->
+                            onValueChange(input.copy(selection = TextRange(newPos)))
+                        },
+                        onLongPress = {
+                            onFocusChange(true)
+                            showFloatingMenu = true
+                        }
                     )
                 }
             }
@@ -406,7 +426,7 @@ fun LivePreviewSection(
 @Composable
 fun PlotterSection(
     expression: String,
-    onClosePlot: () -> Unit
+    onClosePlot: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -443,19 +463,21 @@ fun PlotterSection(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                        .clickable { onClosePlot() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Close plot",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
+                if (onClosePlot != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                            .clickable { onClosePlot() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Clear,
+                            contentDescription = "Close plot",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
             }
 
@@ -484,6 +506,30 @@ fun ResultSection(
     showSteps: Boolean,
     onToggleSteps: () -> Unit
 ) {
+    val context = LocalContext.current
+
+    val irrationalItems = remember(result.exactResultLaTeX, result.inputLaTeX) {
+        MathSolver.extractIrrationalItems(result)
+    }
+
+    val precisions = remember(result.exactResultLaTeX) {
+        mutableStateMapOf<String, Int>()
+    }
+
+    var isIrrationalCardExpanded by remember { mutableStateOf(false) }
+
+    val dynamicDecimalResult = remember(result, precisions.toMap()) {
+        MathSolver.computeDecimalWithPrecisions(result, irrationalItems, precisions)
+    }
+
+    val displayResultLaTeX = remember(result.exactResultLaTeX, dynamicDecimalResult, precisions.toMap()) {
+        if (precisions.values.any { it > 0 }) {
+            dynamicDecimalResult
+        } else {
+            result.exactResultLaTeX
+        }
+    }
+
     Column(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxWidth()
@@ -500,13 +546,36 @@ fun ResultSection(
                 modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = "ROOTS / SOLUTIONS",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ROOTS / SOLUTIONS",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
+                            .clickable {
+                                ClipboardUtils.showCopySelector(context, displayResultLaTeX, "Result LaTeX")
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy Result LaTeX",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
 
                 Box(
                     modifier = Modifier
@@ -518,8 +587,8 @@ fun ResultSection(
                         .padding(16.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
-                    MathRenderer(
-                        latex = result.exactResultLaTeX,
+                    MixedMathText(
+                        text = displayResultLaTeX,
                         fontSize = 28.sp,
                         textColor = MaterialTheme.colorScheme.primary
                     )
@@ -554,156 +623,243 @@ fun ResultSection(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                }
-            }
-        }
 
-        // Bento Cards Row: Split columns grid (Output Forms & Solver system status)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Left Grid Element: Output forms
-            Card(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "OUTPUT FORMS",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    )
-
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Column {
-                            Text(
-                                text = "精确解形式",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            MathRenderer(
-                                latex = result.exactResultLaTeX,
-                                fontSize = 16.sp,
-                                textColor = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-
+                    if (precisions.values.any { it > 0 }) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.1f))
-                        )
-
-                        Column {
+                                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f), RoundedCornerShape(50))
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
                             Text(
-                                text = "小数近似值",
+                                text = "精度已调整",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = result.decimalResult,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                                color = MaterialTheme.colorScheme.tertiary,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
-            }
 
-            // Right Grid Element: Private local offline system stats
-            Card(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                ),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "SOLVER SYSTEM",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
+                if (irrationalItems.isNotEmpty()) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f),
+                        modifier = Modifier.padding(vertical = 2.dp)
                     )
 
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { isIrrationalCardExpanded = !isIrrationalCardExpanded }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Column {
+                            Text(
+                                text = "取整精度",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "共包含 ${irrationalItems.size} 个无理数/根式项",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            )
+                        }
+
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                            val activeCount = precisions.values.count { it > 0 }
+                            if (activeCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                ) {
+                                    Text(
+                                        text = "已调 $activeCount 项",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
-                            Column {
-                                Text(
-                                    text = "离线求解就绪",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "100% 局域计算",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
-                            }
+
+                            Icon(
+                                imageVector = if (isIrrationalCardExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = if (isIrrationalCardExpanded) "收起" else "展开",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         }
+                    }
 
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f))
-                        )
-
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
+                    AnimatedVisibility(
+                        visible = isIrrationalCardExpanded,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(top = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(
-                                text = "内核引擎延迟",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                            Text(
-                                text = "< 2ms",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF2E7D32)
-                            )
+                            irrationalItems.forEach { item ->
+                                val currentLevel = precisions[item.symbol] ?: 0
+
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                            RoundedCornerShape(16.dp)
+                                        )
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            MixedMathText(
+                                                text = item.latexSymbol,
+                                                fontSize = 18.sp,
+                                                textColor = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = "(${item.displayName})",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (currentLevel == 0) MaterialTheme.colorScheme.secondaryContainer
+                                                    else MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = MathSolver.getPrecisionLabel(currentLevel),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (currentLevel == 0) MaterialTheme.colorScheme.onSecondaryContainer
+                                                        else MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "当前带入数值:",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        Text(
+                                            text = MathSolver.formatSubstitutedValueDisplay(item, currentLevel),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+
+                                    Slider(
+                                        value = currentLevel.toFloat(),
+                                        onValueChange = { precisions[item.symbol] = it.roundToInt() },
+                                        valueRange = 0f..6f,
+                                        steps = 5,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        listOf("不取整", "整数", "1位", "2位", "3位", "4位", "6位").forEachIndexed { idx, label ->
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                color = if (currentLevel == idx) MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                                fontWeight = if (currentLevel == idx) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
+                    }
+                }
+            }
+        }
+
+        // Bento Card 2: Output forms
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "OUTPUT FORMS",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f),
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.sp
+                )
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "精确解形式",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MixedMathText(
+                            text = result.exactResultLaTeX,
+                            fontSize = 16.sp,
+                            textColor = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.1f))
+                    )
+
+                    Column {
+                        Text(
+                            text = "小数近似值",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MixedMathText(
+                            text = dynamicDecimalResult,
+                            fontSize = 16.sp,
+                            textColor = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
                     }
                 }
             }
@@ -741,11 +897,11 @@ fun ResultSection(
                         )
                     }
 
-                    Text(
+                    MixedMathText(
                         text = interpretation,
-                        style = MaterialTheme.typography.bodyMedium,
-                        lineHeight = 22.sp,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                        fontSize = 15.sp,
+                        textColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        lineHeight = 22.sp
                     )
                 }
             }
@@ -840,231 +996,32 @@ fun ResultSection(
                                     )
                                 }
                                 Column(modifier = Modifier.weight(1f)) {
-                                    val isChineseText = step.any { it in '\u4e00'..'\u9fa5' }
-                                    if (isChineseText) {
-                                        Text(
-                                            text = step,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    } else {
-                                        MathRenderer(
-                                            latex = step,
-                                            fontSize = 16.sp,
-                                            textColor = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
+                                    MixedMathText(
+                                        text = step,
+                                        fontSize = 16.sp,
+                                        textColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            ClipboardUtils.showCopySelector(context, step, "Step LaTeX")
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy step LaTeX",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
                                 }
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun OnboardingSection(
-    onQuickEquation: (String) -> Unit
-) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        // Main Onboarding Examples Bento Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "✨ OFFLINE EXAMPLES",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    )
-                }
-
-                Text(
-                    text = "点击以下 Bento 快捷卡片，可直接求解并自动在交互式 2D 直角坐标系中渲染出函数图像：",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val examples = listOf(
-                        "x^2 - 5x + 6 = 0" to "一元二次方程求根",
-                        "3x + 4 = 19" to "一元一次方程求解",
-                        "\\sin(x)" to "绘制正弦波形图",
-                        "\\frac{3}{4} + \\frac{2}{5}" to "分数精确计算",
-                        "\\sqrt{18} - \\sqrt{8}" to "根式精简"
-                    )
-
-                    examples.forEach { (eq, desc) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(MaterialTheme.colorScheme.surface)
-                                .clickable { onQuickEquation(eq) }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                MathRenderer(
-                                    latex = eq,
-                                    fontSize = 18.sp,
-                                    textColor = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = desc,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "→",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Offline Security/Engine Status Bento Widget
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            ),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "100% 离线计算内核",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "无需网络权限，完全本地隐私安全运行，极致零时延算法，无限制方程式和代数式快速推导。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HistorySection(
-    history: List<HistoryItem>,
-    onSelect: (HistoryItem) -> Unit,
-    onDelete: (HistoryItem) -> Unit
-) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            text = "CALCULATION HISTORY",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 1.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-
-        history.forEach { item ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                    .clickable { onSelect(item) }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.expression,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Box {
-                        MathRenderer(
-                            latex = item.result,
-                            fontSize = 15.sp,
-                            textColor = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
-                        .clickable { onDelete(item) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Delete history item",
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp)
-                    )
                 }
             }
         }

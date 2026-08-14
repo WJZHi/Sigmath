@@ -16,6 +16,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class ThemeMode(val label: String) {
+    LIGHT("浅色"),
+    DARK("深色"),
+    SYSTEM("跟随系统")
+}
+
 class MathViewModel(
     application: Application,
     private val savedStateHandle: SavedStateHandle
@@ -24,6 +30,7 @@ class MathViewModel(
     private val repository = HistoryRepository(database.historyDao())
 
     companion object {
+        private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_INPUT_TEXT = "input_text"
         private const val KEY_INPUT_SELECTION_START = "input_selection_start"
         private const val KEY_INPUT_SELECTION_END = "input_selection_end"
@@ -37,6 +44,23 @@ class MathViewModel(
         private const val KEY_SOL_DECIMAL_RESULT = "sol_decimal_result"
         private const val KEY_SOL_ROOT_X_VALUES = "sol_root_x_values"
         private const val KEY_SOL_GEOMETRIC = "sol_geometric"
+    }
+
+    var themeMode by mutableStateOf(
+        run {
+            val saved = savedStateHandle.get<String>(KEY_THEME_MODE)
+            when (saved) {
+                "LIGHT" -> ThemeMode.LIGHT
+                "DARK" -> ThemeMode.DARK
+                else -> ThemeMode.SYSTEM
+            }
+        }
+    )
+        private set
+
+    fun updateThemeMode(mode: ThemeMode) {
+        themeMode = mode
+        savedStateHandle[KEY_THEME_MODE] = mode.name
     }
 
     var input by mutableStateOf(
@@ -109,27 +133,11 @@ class MathViewModel(
         )
 
     private fun formatPlotExpression(rawInput: String): String {
-        val trimmed = rawInput.trim()
-        if (trimmed.isEmpty()) return ""
-        if (trimmed.contains("=")) {
-            val parts = trimmed.split("=")
-            if (parts.size == 2) {
-                val left = parts[0].trim()
-                val right = parts[1].trim()
-                val leftLower = left.lowercase(Locale.US)
-                val rightLower = right.lowercase(Locale.US)
-                if (leftLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
-                    return right
-                } else if (rightLower in listOf("y", "f(x)", "g(x)", "y(x)", "f", "g")) {
-                    return left
-                } else if (leftLower == "x" && rightLower == "y") {
-                    return "x"
-                } else {
-                    return "($left) - ($right)"
-                }
-            }
+        var cleaned = rawInput.trim()
+        while (cleaned.endsWith("=")) {
+            cleaned = cleaned.substring(0, cleaned.length - 1).trim()
         }
-        return trimmed
+        return cleaned
     }
 
     fun updateInput(newValue: TextFieldValue) {
@@ -148,6 +156,12 @@ class MathViewModel(
                 savedStateHandle[KEY_PLOT_EXPRESSION] = plotEq
             }
         }
+    }
+
+    fun insertTextAtCursor(textToInsert: String) {
+        if (textToInsert.isEmpty()) return
+        val updated = ClipboardUtils.insertAtCursor(input, textToInsert)
+        updateInput(updated)
     }
 
     fun togglePlot() {
@@ -187,7 +201,7 @@ class MathViewModel(
                     }
                     repository.insert(
                         HistoryItem(
-                            expression = rawInput,
+                            expression = result.inputLaTeX,
                             result = summaryResult,
                             type = result.type
                         )

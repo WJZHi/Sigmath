@@ -1,29 +1,37 @@
 package com.example
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.theme.MyApplicationTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
+    private val viewModel: MathViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                val viewModel: MathViewModel = viewModel()
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    MainScreen(
-                        viewModel = viewModel,
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+            val themeMode = viewModel.themeMode
+            val isDarkTheme = when (themeMode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+
+            MyApplicationTheme(darkTheme = isDarkTheme) {
+                ParallaxSwipeBackNavHost(
+                    viewModel = viewModel,
+                    onOpenHistory = {
+                        HistoryBottomSheetDialogFragment.newInstance()
+                            .show(supportFragmentManager, HistoryBottomSheetDialogFragment.TAG)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
     }

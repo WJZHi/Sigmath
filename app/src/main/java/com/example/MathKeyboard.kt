@@ -1,6 +1,11 @@
 package com.example
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -16,8 +21,8 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,9 +33,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -42,7 +51,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 
 enum class KeyboardPage {
     BASIC, ADVANCED, ALPHABET
@@ -78,7 +90,9 @@ fun MathKeyboard(
     fieldValue: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     onSolve: () -> Unit,
+    canHideKeyboard: Boolean = true,
     onHideKeyboard: () -> Unit = {},
+    onPasteRequest: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentPage by remember { mutableStateOf(KeyboardPage.BASIC) }
@@ -124,23 +138,219 @@ fun MathKeyboard(
                 )
             )
         } else if (start > 0) {
-            // Check for LaTeX structures to delete as a whole if possible, or just standard backspace
-            val before = text.substring(0, start - 1)
+            val before = text.substring(0, start)
             val after = text.substring(start, text.length)
+
+            val trailingSpacesInBefore = before.length - before.trimEnd().length
+            val targetBefore = before.trimEnd()
+
+            val leadingSpacesInAfter = after.length - after.trimStart().length
+            val targetAfter = after.trimStart()
+
+            var deleteBeforeCountInTarget = 1
+            var deleteAfterCountInTarget = 0
+
+            when {
+                // 1. Fraction \frac{|}{} - cursor in empty numerator
+                targetBefore.endsWith("\\frac{") && targetAfter.startsWith("}{}") -> {
+                    deleteBeforeCountInTarget = 6
+                    deleteAfterCountInTarget = 3
+                }
+                // 2. Fraction \frac{|}{...} - cursor in empty numerator, denominator has content or braces
+                targetBefore.endsWith("\\frac{") && targetAfter.startsWith("}{") -> {
+                    deleteBeforeCountInTarget = 6
+                    deleteAfterCountInTarget = 2
+                }
+                // 3. Fraction cursor after \frac{
+                targetBefore.endsWith("\\frac{") && targetAfter.startsWith("}") -> {
+                    deleteBeforeCountInTarget = 6
+                    deleteAfterCountInTarget = 1
+                }
+                // 4. Cursor right after empty fraction \frac{}{}`
+                targetBefore.endsWith("\\frac{}{}") -> {
+                    deleteBeforeCountInTarget = 10
+                }
+                // 5. Square root \sqrt{|}
+                targetBefore.endsWith("\\sqrt{") && targetAfter.startsWith("}") -> {
+                    deleteBeforeCountInTarget = 6
+                    deleteAfterCountInTarget = 1
+                }
+                targetBefore.endsWith("\\sqrt{}") -> {
+                    deleteBeforeCountInTarget = 7
+                }
+                // 6. Power ^{|}
+                targetBefore.endsWith("^{") && targetAfter.startsWith("}") -> {
+                    deleteBeforeCountInTarget = 2
+                    deleteAfterCountInTarget = 1
+                }
+                targetBefore.endsWith("^{}") -> {
+                    deleteBeforeCountInTarget = 3
+                }
+                // 7. Subscript _{|}
+                targetBefore.endsWith("_{") && targetAfter.startsWith("}") -> {
+                    deleteBeforeCountInTarget = 2
+                    deleteAfterCountInTarget = 1
+                }
+                targetBefore.endsWith("_{}") -> {
+                    deleteBeforeCountInTarget = 3
+                }
+                // 8. Vector \vec{|}
+                targetBefore.endsWith("\\vec{") && targetAfter.startsWith("}") -> {
+                    deleteBeforeCountInTarget = 5
+                    deleteAfterCountInTarget = 1
+                }
+                // 9. Functions with parens e.g. \sin(), \cos(), \tan(), \log(), \ln()
+                targetBefore.endsWith("\\sin(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\cos(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\tan(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\log(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\ln(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 4; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("abs(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 4; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("floor(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 6; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\max(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                targetBefore.endsWith("\\gcf(") && targetAfter.startsWith(")") -> { deleteBeforeCountInTarget = 5; deleteAfterCountInTarget = 1 }
+                // 10. Atomic LaTeX command words e.g. \alpha, \beta, \theta, \pi, \le, \ge, \neq, \approx
+                Regex("""\\[a-zA-Z]+$""").containsMatchIn(targetBefore) -> {
+                    val match = Regex("""\\[a-zA-Z]+$""").find(targetBefore)
+                    if (match != null) {
+                        deleteBeforeCountInTarget = match.value.length
+                    }
+                }
+            }
+
+            val remBeforeInTarget = targetBefore.substring(0, (targetBefore.length - deleteBeforeCountInTarget).coerceAtLeast(0))
+            val leadingSpacesInTarget = remBeforeInTarget.length - remBeforeInTarget.trimEnd().length
+
+            val opChars = setOf('+', '-', '=', '<', '>', '*', '/', ',', ':', ';', '!', '×', '÷', '±', '∓', '≤', '≥', '≠', '≈', '≪', '≫')
+            val isOperatorOrCommand = targetBefore.endsWith("}") || targetBefore.endsWith(")") ||
+                    Regex("""\\[a-zA-Z]+$""").containsMatchIn(targetBefore) ||
+                    (targetBefore.isNotEmpty() && targetBefore.last() in opChars)
+
+            val totalDeleteBefore = if (isOperatorOrCommand) {
+                trailingSpacesInBefore + deleteBeforeCountInTarget + leadingSpacesInTarget
+            } else {
+                trailingSpacesInBefore + deleteBeforeCountInTarget
+            }.coerceAtMost(before.length)
+
+            val totalDeleteAfter = (leadingSpacesInAfter + deleteAfterCountInTarget).coerceAtMost(after.length)
+
+            val newBefore = before.substring(0, before.length - totalDeleteBefore)
+            val newAfter = after.substring(totalDeleteAfter)
+
+            val newCursorPos = newBefore.length
             onValueChange(
                 TextFieldValue(
-                    text = before + after,
-                    selection = TextRange(start - 1, start - 1)
+                    text = newBefore + newAfter,
+                    selection = TextRange(newCursorPos, newCursorPos)
                 )
             )
         }
     }
 
+    fun getValidCursorPositions(text: String): BooleanArray {
+        val len = text.length
+        val valid = BooleanArray(len + 1) { true }
+
+        val cmdRegex = Regex("""\\[a-zA-Z]+""")
+        for (match in cmdRegex.findAll(text)) {
+            val start = match.range.first
+            val end = match.range.last + 1
+            for (p in (start + 1) until end) {
+                valid[p] = false
+            }
+        }
+
+        val cmdBraceRegex = Regex("""\\[a-zA-Z]+[\{_]""")
+        for (match in cmdBraceRegex.findAll(text)) {
+            val start = match.range.first
+            val end = match.range.last + 1
+            for (p in (start + 1) until end) {
+                valid[p] = false
+            }
+        }
+
+        val funcRegex = Regex("""(\\[a-zA-Z]+|abs|floor)\(""")
+        for (match in funcRegex.findAll(text)) {
+            val start = match.range.first
+            val end = match.range.last + 1
+            for (p in (start + 1) until end) {
+                valid[p] = false
+            }
+        }
+
+        for (i in 0 until len - 1) {
+            if (text[i] == '}' && text[i + 1] == '{') {
+                valid[i + 1] = false
+            }
+            if (text[i] == ']' && text[i + 1] == '{') {
+                valid[i + 1] = false
+            }
+            if (text[i] == '^' && text[i + 1] == '{') {
+                valid[i + 1] = false
+            }
+            if (text[i] == '_' && text[i + 1] == '{') {
+                valid[i + 1] = false
+            }
+        }
+
+        for (i in 0 until len - 2) {
+            if (text[i] == '}' && text[i + 1] == '^' && text[i + 2] == '{') {
+                valid[i + 1] = false
+                valid[i + 2] = false
+            }
+        }
+
+        // Space skipping rules:
+        // Ignore space positions between elements so moving cursor skips spaces.
+        val opChars = setOf('+', '-', '=', '<', '>', '*', '/', ',', ':', ';', '!', '×', '÷', '±', '∓', '≤', '≥', '≠', '≈', '≪', '≫')
+        for (p in 1 until len) {
+            val prevChar = text[p - 1]
+            val currChar = text[p]
+
+            // 1. Position between two spaces -> invalid
+            if (prevChar == ' ' && currChar == ' ') {
+                valid[p] = false
+            }
+            // 2. Position between space and operator/command -> invalid (e.g. "x |+ 2" or "x |\le 2")
+            if (prevChar == ' ' && (currChar in opChars || currChar == '\\')) {
+                valid[p] = false
+            }
+            // 3. Position between operator/command and trailing space -> invalid (e.g. "x +| 2" or "x \le| 2")
+            if ((prevChar in opChars || prevChar == '}' || prevChar == ')') && currChar == ' ') {
+                valid[p] = false
+            }
+        }
+
+        valid[0] = true
+        valid[len] = true
+        return valid
+    }
+
     fun handleMoveCursor(direction: Int) {
         val text = fieldValue.text
+        if (text.isEmpty()) return
+
+        val validPositions = getValidCursorPositions(text)
         val selection = fieldValue.selection
         val currentPos = selection.start.coerceIn(0, text.length)
-        val newPos = (currentPos + direction).coerceIn(0, text.length)
+
+        var newPos = currentPos
+        if (direction > 0) {
+            for (p in (currentPos + 1)..text.length) {
+                if (validPositions[p]) {
+                    newPos = p
+                    break
+                }
+            }
+        } else if (direction < 0) {
+            for (p in (currentPos - 1) downTo 0) {
+                if (validPositions[p]) {
+                    newPos = p
+                    break
+                }
+            }
+        }
+
         onValueChange(
             TextFieldValue(
                 text = text,
@@ -153,6 +363,69 @@ fun MathKeyboard(
         onValueChange(TextFieldValue("", selection = TextRange(0, 0)))
     }
 
+    fun handleSmartBracket() {
+        val updated = SmartBracketHelper.processBracketInput(fieldValue)
+        onValueChange(updated)
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+    val dragOffsetAnimatable = remember { Animatable(0f) }
+    var containerWidthPx by remember { mutableFloatStateOf(0f) }
+
+    var pageSwitchJob by remember { mutableStateOf<Job?>(null) }
+    var pendingTargetPage by remember { mutableStateOf<KeyboardPage?>(null) }
+
+    fun commitPendingPageIfAny() {
+        val pending = pendingTargetPage
+        if (pending != null && pending != currentPage) {
+            pageSwitchJob?.cancel()
+            currentPage = pending
+            pendingTargetPage = null
+            coroutineScope.launch {
+                dragOffsetAnimatable.snapTo(0f)
+            }
+        }
+    }
+
+    fun KeyboardPage.previous(): KeyboardPage = when (this) {
+        KeyboardPage.BASIC -> KeyboardPage.ALPHABET
+        KeyboardPage.ADVANCED -> KeyboardPage.BASIC
+        KeyboardPage.ALPHABET -> KeyboardPage.ADVANCED
+    }
+
+    fun KeyboardPage.next(): KeyboardPage = when (this) {
+        KeyboardPage.ALPHABET -> KeyboardPage.BASIC
+        KeyboardPage.BASIC -> KeyboardPage.ADVANCED
+        KeyboardPage.ADVANCED -> KeyboardPage.ALPHABET
+    }
+
+    val switchPageTo: (KeyboardPage) -> Unit = { target ->
+        commitPendingPageIfAny()
+        if (target != currentPage) {
+            val isLeftToRight = (target == KeyboardPage.ALPHABET && currentPage == KeyboardPage.BASIC) ||
+                                (target == KeyboardPage.BASIC && currentPage == KeyboardPage.ADVANCED) ||
+                                (target == KeyboardPage.ADVANCED && currentPage == KeyboardPage.ALPHABET)
+            pageSwitchJob?.cancel()
+            pendingTargetPage = target
+            pageSwitchJob = coroutineScope.launch {
+                val width = if (containerWidthPx > 0f) containerWidthPx else 1000f
+                val targetOffset = if (isLeftToRight) width else -width
+                try {
+                    dragOffsetAnimatable.animateTo(
+                        targetValue = targetOffset,
+                        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+                    )
+                    currentPage = target
+                    dragOffsetAnimatable.snapTo(0f)
+                } finally {
+                    if (currentPage == target) {
+                        pendingTargetPage = null
+                    }
+                }
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -163,34 +436,85 @@ fun MathKeyboard(
                 awaitPointerEventScope {
                     while (true) {
                         val down = awaitFirstDown(pass = PointerEventPass.Initial, requireUnconsumed = false)
+
+                        // 核心修复：如果上一轮滑动的翻页动画正在执行中，瞬间按下时立即将页面状态落盘提交到目标页
+                        if (pendingTargetPage != null && pendingTargetPage != currentPage) {
+                            pageSwitchJob?.cancel()
+                            currentPage = pendingTargetPage!!
+                            pendingTargetPage = null
+                            coroutineScope.launch {
+                                dragOffsetAnimatable.snapTo(0f)
+                            }
+                        }
+
                         val startX = down.position.x
                         var lastX = startX
+                        var isDragging = false
 
                         while (true) {
                             val event = awaitPointerEvent(pass = PointerEventPass.Initial)
                             val change = event.changes.firstOrNull() ?: break
                             lastX = change.position.x
 
-                            if (!change.pressed) {
+                            if (change.pressed) {
                                 val deltaX = lastX - startX
-                                val threshold = 50f // gesture swipe threshold (~20-25dp)
-
-                                // 只有在包含浮动选单 (Popup) 激活时，滑动手势才失效
                                 if (!isAnyPopupActive) {
-                                    if (deltaX > threshold) {
-                                        // 手指从左向右滑动 -> 切换到左侧模式 ([字母] <- [基础] <- [高级] <- [字母])
-                                        currentPage = when (currentPage) {
-                                            KeyboardPage.BASIC -> KeyboardPage.ALPHABET
-                                            KeyboardPage.ADVANCED -> KeyboardPage.BASIC
-                                            KeyboardPage.ALPHABET -> KeyboardPage.ADVANCED
+                                    if (abs(deltaX) > 12f || isDragging) {
+                                        isDragging = true
+                                        pageSwitchJob?.cancel()
+                                        coroutineScope.launch {
+                                            dragOffsetAnimatable.snapTo(deltaX)
                                         }
-                                    } else if (deltaX < -threshold) {
-                                        // 手指从右向左滑动 -> 切换到右侧模式 ([字母] -> [基础] -> [高级] -> [字母])
-                                        currentPage = when (currentPage) {
-                                            KeyboardPage.ALPHABET -> KeyboardPage.BASIC
-                                            KeyboardPage.BASIC -> KeyboardPage.ADVANCED
-                                            KeyboardPage.ADVANCED -> KeyboardPage.ALPHABET
+                                    }
+                                } else {
+                                    if (isDragging) {
+                                        isDragging = false
+                                        coroutineScope.launch {
+                                            dragOffsetAnimatable.snapTo(0f)
                                         }
+                                    }
+                                }
+                            } else {
+                                if (isDragging && !isAnyPopupActive && containerWidthPx > 0f) {
+                                    val finalDeltaX = lastX - startX
+                                    val threshold = containerWidthPx * 0.16f
+                                    val targetPage = when {
+                                        finalDeltaX > threshold -> currentPage.previous()
+                                        finalDeltaX < -threshold -> currentPage.next()
+                                        else -> null
+                                    }
+
+                                    pageSwitchJob?.cancel()
+                                    if (targetPage != null) {
+                                        pendingTargetPage = targetPage
+                                        pageSwitchJob = coroutineScope.launch {
+                                            val targetOffset = if (finalDeltaX > 0) containerWidthPx else -containerWidthPx
+                                            try {
+                                                dragOffsetAnimatable.animateTo(
+                                                    targetValue = targetOffset,
+                                                    animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)
+                                                )
+                                                currentPage = targetPage
+                                                dragOffsetAnimatable.snapTo(0f)
+                                            } finally {
+                                                if (currentPage == targetPage) {
+                                                    pendingTargetPage = null
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        pendingTargetPage = null
+                                        pageSwitchJob = coroutineScope.launch {
+                                            dragOffsetAnimatable.animateTo(
+                                                targetValue = 0f,
+                                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                                            )
+                                        }
+                                    }
+                                } else if (isDragging) {
+                                    pageSwitchJob?.cancel()
+                                    pageSwitchJob = coroutineScope.launch {
+                                        dragOffsetAnimatable.snapTo(0f)
                                     }
                                 }
                                 break
@@ -201,6 +525,8 @@ fun MathKeyboard(
             },
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        val context = LocalContext.current
+
         // Keyboard Control Bar
         Row(
             modifier = Modifier
@@ -210,99 +536,267 @@ fun MathKeyboard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                KeyboardTabChip("字母", currentPage == KeyboardPage.ALPHABET) { currentPage = KeyboardPage.ALPHABET }
-                KeyboardTabChip("基础", currentPage == KeyboardPage.BASIC) { currentPage = KeyboardPage.BASIC }
-                KeyboardTabChip("高级", currentPage == KeyboardPage.ADVANCED) { currentPage = KeyboardPage.ADVANCED }
+                KeyboardTabChip("字母", currentPage == KeyboardPage.ALPHABET) { switchPageTo(KeyboardPage.ALPHABET) }
+                KeyboardTabChip("基础", currentPage == KeyboardPage.BASIC) { switchPageTo(KeyboardPage.BASIC) }
+                KeyboardTabChip("高级", currentPage == KeyboardPage.ADVANCED) { switchPageTo(KeyboardPage.ADVANCED) }
             }
 
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable { onHideKeyboard() }
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                if (fieldValue.text.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable {
+                                ClipboardUtils.showCopySelector(context, fieldValue.text)
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "复制",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clickable {
+                            if (onPasteRequest != null) {
+                                onPasteRequest()
+                            } else {
+                                ClipboardUtils.showPasteSelector(context)
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "收起",
+                        text = "粘贴",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
                     )
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Hide keyboard",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
+                }
+
+
+
+                if (canHideKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable { onHideKeyboard() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "收起",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Hide keyboard",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        AnimatedContent(
-            targetState = currentPage,
-            transitionSpec = {
-                if ((targetState == KeyboardPage.ALPHABET && initialState == KeyboardPage.BASIC) ||
-                    (targetState == KeyboardPage.BASIC && initialState == KeyboardPage.ADVANCED) ||
-                    (targetState == KeyboardPage.ADVANCED && initialState == KeyboardPage.ALPHABET)
+        val currentOffset = dragOffsetAnimatable.value
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { containerWidthPx = it.width.toFloat() }
+                .clipToBounds()
+        ) {
+            val width = if (containerWidthPx > 0f) containerWidthPx else 1000f
+
+            if (currentOffset > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = currentOffset }
                 ) {
-                    // Swiping Left-to-Right (slide in from left)
-                    (slideInHorizontally { -it } + fadeIn()).togetherWith(
-                        slideOutHorizontally { it } + fadeOut()
-                    )
-                } else {
-                    // Swiping Right-to-Left (slide in from right)
-                    (slideInHorizontally { it } + fadeIn()).togetherWith(
-                        slideOutHorizontally { -it } + fadeOut()
+                    RenderKeyboardPage(
+                        page = currentPage,
+                        onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+                        onSmartBracket = { handleSmartBracket() },
+                        onAC = { handleAC() },
+                        onPopupStateChanged = { active -> isAnyPopupActive = active }
                     )
                 }
-            },
-            label = "keyboard_page_animated_content"
-        ) { page ->
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                when (page) {
-                    KeyboardPage.BASIC -> {
-                        BasicKeyboardLayout(
-                            onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
-                            onBackspace = { handleBackspace() },
-                            onMoveCursor = { dir -> handleMoveCursor(dir) },
-                            onAC = { handleAC() },
-                            onSolve = onSolve,
-                            onSwitchPage = { currentPage = KeyboardPage.ADVANCED },
-                            onPopupStateChanged = { active -> isAnyPopupActive = active }
-                        )
-                    }
-                    KeyboardPage.ADVANCED -> {
-                        AdvancedKeyboardLayout(
-                            onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
-                            onBackspace = { handleBackspace() },
-                            onMoveCursor = { dir -> handleMoveCursor(dir) },
-                            onAC = { handleAC() },
-                            onSolve = onSolve,
-                            onSwitchPage = { currentPage = KeyboardPage.ALPHABET }
-                        )
-                    }
-                    KeyboardPage.ALPHABET -> {
-                        AlphabetKeyboardLayout(
-                            onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
-                            onBackspace = { handleBackspace() },
-                            onMoveCursor = { dir -> handleMoveCursor(dir) },
-                            onAC = { handleAC() },
-                            onSolve = onSolve,
-                            onSwitchPage = { currentPage = KeyboardPage.BASIC }
-                        )
-                    }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = currentOffset - width }
+                ) {
+                    RenderKeyboardPage(
+                        page = currentPage.previous(),
+                        onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+                        onSmartBracket = { handleSmartBracket() },
+                        onAC = { handleAC() },
+                        onPopupStateChanged = { active -> isAnyPopupActive = active }
+                    )
                 }
+            } else if (currentOffset < 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = currentOffset }
+                ) {
+                    RenderKeyboardPage(
+                        page = currentPage,
+                        onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+                        onSmartBracket = { handleSmartBracket() },
+                        onAC = { handleAC() },
+                        onPopupStateChanged = { active -> isAnyPopupActive = active }
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = currentOffset + width }
+                ) {
+                    RenderKeyboardPage(
+                        page = currentPage.next(),
+                        onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+                        onSmartBracket = { handleSmartBracket() },
+                        onAC = { handleAC() },
+                        onPopupStateChanged = { active -> isAnyPopupActive = active }
+                    )
+                }
+            } else {
+                RenderKeyboardPage(
+                    page = currentPage,
+                    onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+                    onSmartBracket = { handleSmartBracket() },
+                    onAC = { handleAC() },
+                    onPopupStateChanged = { active -> isAnyPopupActive = active }
+                )
+            }
+        }
+
+        // Fixed bottom row (←, →, ↵, ⌫, ➤) that stays static and does not slide with keyboard pages
+        FixedBottomActionRow(
+            onMoveCursor = { dir -> handleMoveCursor(dir) },
+            onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
+            onBackspace = { handleBackspace() },
+            onSolve = onSolve
+        )
+    }
+}
+
+@Composable
+private fun FixedBottomActionRow(
+    onMoveCursor: (Int) -> Unit,
+    onKeyInsert: (String, Int) -> Unit,
+    onBackspace: () -> Unit,
+    onSolve: () -> Unit
+) {
+    val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
+    val actionBg = MaterialTheme.colorScheme.primary
+    val actionText = MaterialTheme.colorScheme.onPrimary
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        KeyboardButton("←", { onMoveCursor(-1) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton("→", { onMoveCursor(1) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton("↵", { onKeyInsert("\n", 0) }, Modifier.weight(1f), containerColor = darkBg)
+
+        // Delete button
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(darkBg)
+                .clickable { onBackspace() }
+                .padding(vertical = 12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.Backspace,
+                contentDescription = "Backspace",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
+        // Send / Solve button
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .weight(1.2f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(actionBg)
+                .clickable { onSolve() }
+                .padding(vertical = 12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.Send,
+                contentDescription = "Solve",
+                tint = actionText,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RenderKeyboardPage(
+    page: KeyboardPage,
+    onKeyInsert: (String, Int) -> Unit,
+    onSmartBracket: () -> Unit,
+    onAC: () -> Unit,
+    onPopupStateChanged: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        when (page) {
+            KeyboardPage.BASIC -> {
+                BasicKeyboardLayout(
+                    onKeyInsert = onKeyInsert,
+                    onSmartBracket = onSmartBracket,
+                    onAC = onAC,
+                    onPopupStateChanged = onPopupStateChanged
+                )
+            }
+            KeyboardPage.ADVANCED -> {
+                AdvancedKeyboardLayout(
+                    onKeyInsert = onKeyInsert,
+                    onPopupStateChanged = onPopupStateChanged
+                )
+            }
+            KeyboardPage.ALPHABET -> {
+                AlphabetKeyboardLayout(
+                    onKeyInsert = onKeyInsert
+                )
             }
         }
     }
@@ -437,9 +931,9 @@ fun PopupOptionButton(
             ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     shadowElevation = 8.dp,
-                    tonalElevation = 2.dp,
+                    tonalElevation = 4.dp,
                     modifier = Modifier.padding(2.dp)
                 ) {
                     Row(
@@ -462,7 +956,7 @@ fun PopupOptionButton(
                                 Text(
                                     text = option,
                                     color = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                                            else Color.Black,
+                                            else MaterialTheme.colorScheme.onSurface,
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Medium,
                                     fontFamily = FontFamily.SansSerif
@@ -479,16 +973,11 @@ fun PopupOptionButton(
 @Composable
 fun ColumnScope.BasicKeyboardLayout(
     onKeyInsert: (String, Int) -> Unit,
-    onBackspace: () -> Unit,
-    onMoveCursor: (Int) -> Unit,
+    onSmartBracket: () -> Unit,
     onAC: () -> Unit,
-    onSolve: () -> Unit,
-    onSwitchPage: () -> Unit,
     onPopupStateChanged: ((Boolean) -> Unit)? = null
 ) {
     val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
-    val actionBg = MaterialTheme.colorScheme.primary
-    val actionText = MaterialTheme.colorScheme.onPrimary
 
     // Row 1: AC, %, 7, 8, 9, ÷
     Row(
@@ -517,7 +1006,23 @@ fun ColumnScope.BasicKeyboardLayout(
             containerColor = darkBg,
             isBold = true
         )
-        KeyboardButton("√", { onKeyInsert("\\sqrt{}", -1) }, Modifier.weight(1f), containerColor = darkBg)
+        PopupOptionButton(
+            defaultText = "√",
+            options = remember { listOf("√", "ⁿ√", "∛", "∜") },
+            onOptionSelected = { option ->
+                when (option) {
+                    "√" -> onKeyInsert("\\sqrt{}", -1)
+                    "ⁿ√" -> onKeyInsert("\\sqrt[]{}", -3)
+                    "∛" -> onKeyInsert("\\sqrt[3]{}", -1)
+                    "∜" -> onKeyInsert("\\sqrt[4]{}", -1)
+                    else -> onKeyInsert("\\sqrt{}", -1)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
         KeyboardButton("4", { onKeyInsert("4", 0) }, Modifier.weight(1f))
         KeyboardButton("5", { onKeyInsert("5", 0) }, Modifier.weight(1f))
         KeyboardButton("6", { onKeyInsert("6", 0) }, Modifier.weight(1f))
@@ -529,7 +1034,22 @@ fun ColumnScope.BasicKeyboardLayout(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        KeyboardButton("x²", { onKeyInsert("^{2}", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        PopupOptionButton(
+            defaultText = "x²",
+            options = remember { listOf("x²", "x³", "xⁿ") },
+            onOptionSelected = { option ->
+                when (option) {
+                    "x²" -> onKeyInsert("^{2}", 0)
+                    "x³" -> onKeyInsert("^{3}", 0)
+                    "xⁿ" -> onKeyInsert("^{}", -1)
+                    else -> onKeyInsert("^{2}", 0)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
         KeyboardButton("□/□", { onKeyInsert("\\frac{}{}", -3) }, Modifier.weight(1f), containerColor = darkBg)
         KeyboardButton("1", { onKeyInsert("1", 0) }, Modifier.weight(1f))
         KeyboardButton("2", { onKeyInsert("2", 0) }, Modifier.weight(1f))
@@ -537,88 +1057,97 @@ fun ColumnScope.BasicKeyboardLayout(
         KeyboardButton("-", { onKeyInsert(" - ", 0) }, Modifier.weight(1f), containerColor = darkBg)
     }
 
-    // Row 4: (, ), 0, ., =, +
+    // Row 4: ( ), 0, ., =, +
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        KeyboardButton("(", { onKeyInsert("(", 0) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton(")", { onKeyInsert(")", 0) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("0", { onKeyInsert("0", 0) }, Modifier.weight(1.5f))
-        KeyboardButton(".", { onKeyInsert(".", 0) }, Modifier.weight(0.8f))
-        KeyboardButton("=", { onKeyInsert(" = ", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton(
+            text = "( )",
+            onClick = onSmartBracket,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
+        KeyboardButton("0", { onKeyInsert("0", 0) }, Modifier.weight(2f))
+        PopupOptionButton(
+            defaultText = ".",
+            options = remember { listOf(".", ",", ";") },
+            onOptionSelected = { option ->
+                when (option) {
+                    "." -> onKeyInsert(".", 0)
+                    "," -> onKeyInsert(",", 0)
+                    ";" -> onKeyInsert(";", 0)
+                    else -> onKeyInsert(".", 0)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            isBold = true
+        )
+        PopupOptionButton(
+            defaultText = "=",
+            options = remember { listOf("=", "≠") },
+            onOptionSelected = { option ->
+                when (option) {
+                    "=" -> onKeyInsert(" = ", 0)
+                    "≠" -> onKeyInsert(" \\neq ", 0)
+                    else -> onKeyInsert(" = ", 0)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
         KeyboardButton("+", { onKeyInsert(" + ", 0) }, Modifier.weight(1f), containerColor = darkBg)
-    }
-
-    // Row 5: f/Δ, ←, →, ↵, ⌫, Send
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        KeyboardButton("f/Δ...", onSwitchPage, Modifier.weight(1.2f), containerColor = darkBg, isBold = true, fontSize = 15)
-        KeyboardButton("←", { onMoveCursor(-1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("→", { onMoveCursor(1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("↵", { onKeyInsert("\n", 0) }, Modifier.weight(1f), containerColor = darkBg)
-
-        // Delete button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(darkBg)
-                .clickable { onBackspace() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Backspace",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        // Send button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1.5f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(actionBg)
-                .clickable { onSolve() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Solve",
-                tint = actionText,
-                modifier = Modifier.size(20.dp)
-            )
-        }
     }
 }
 
 @Composable
 fun ColumnScope.AdvancedKeyboardLayout(
     onKeyInsert: (String, Int) -> Unit,
-    onBackspace: () -> Unit,
-    onMoveCursor: (Int) -> Unit,
-    onAC: () -> Unit,
-    onSolve: () -> Unit,
-    onSwitchPage: () -> Unit
+    onPopupStateChanged: ((Boolean) -> Unit)? = null
 ) {
     val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
-    val actionBg = MaterialTheme.colorScheme.primary
-    val actionText = MaterialTheme.colorScheme.onPrimary
 
     // Row 1: <, >, f(x), log, e^x, e
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        KeyboardButton("<", { onKeyInsert(" < ", 0) }, Modifier.weight(1f))
-        KeyboardButton(">", { onKeyInsert(" > ", 0) }, Modifier.weight(1f))
+        PopupOptionButton(
+            defaultText = "<",
+            options = remember { listOf("<", "≤", "≠") },
+            onOptionSelected = { option ->
+                when (option) {
+                    "<" -> onKeyInsert(" < ", 0)
+                    "≤" -> onKeyInsert(" \\le ", 0)
+                    "≠" -> onKeyInsert(" \\neq ", 0)
+                    else -> onKeyInsert(" < ", 0)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
+        PopupOptionButton(
+            defaultText = ">",
+            options = remember { listOf(">", "≥", "≠") },
+            onOptionSelected = { option ->
+                when (option) {
+                    ">" -> onKeyInsert(" > ", 0)
+                    "≥" -> onKeyInsert(" \\ge ", 0)
+                    "≠" -> onKeyInsert(" \\neq ", 0)
+                    else -> onKeyInsert(" > ", 0)
+                }
+            },
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = darkBg,
+            isBold = true
+        )
         KeyboardButton("f(x)", { onKeyInsert("f(x)", 0) }, Modifier.weight(1f))
         KeyboardButton("log", { onKeyInsert("\\log()", -1) }, Modifier.weight(1.2f))
         KeyboardButton("e^x", { onKeyInsert("e^{}", -1) }, Modifier.weight(1f))
@@ -663,69 +1192,12 @@ fun ColumnScope.AdvancedKeyboardLayout(
         KeyboardButton("nPr", { onKeyInsert("P", 0) }, Modifier.weight(0.8f))
         KeyboardButton("gcf", { onKeyInsert("\\gcf()", -1) }, Modifier.weight(1f))
     }
-
-    // Row 5: xyz, ←, →, ↵, ⌫, Send
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        KeyboardButton("xyz...", onSwitchPage, Modifier.weight(1.2f), containerColor = darkBg, isBold = true, fontSize = 15)
-        KeyboardButton("←", { onMoveCursor(-1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("→", { onMoveCursor(1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("↵", { onKeyInsert("\n", 0) }, Modifier.weight(1f), containerColor = darkBg)
-
-        // Delete button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(darkBg)
-                .clickable { onBackspace() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Backspace",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        // Send button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1.5f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(actionBg)
-                .clickable { onSolve() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Solve",
-                tint = actionText,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
 }
 
 @Composable
 fun ColumnScope.AlphabetKeyboardLayout(
-    onKeyInsert: (String, Int) -> Unit,
-    onBackspace: () -> Unit,
-    onMoveCursor: (Int) -> Unit,
-    onAC: () -> Unit,
-    onSolve: () -> Unit,
-    onSwitchPage: () -> Unit
+    onKeyInsert: (String, Int) -> Unit
 ) {
-    val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
-    val actionBg = MaterialTheme.colorScheme.primary
-    val actionText = MaterialTheme.colorScheme.onPrimary
-
     val row1 = listOf("a", "b", "c", "d", "e", "f", "g", "h")
     val row2 = listOf("i", "j", "k", "l", "m", "n", "o", "p")
     val row3 = listOf("q", "r", "s", "t", "u", "v", "w", "τ")
@@ -777,54 +1249,6 @@ fun ColumnScope.AlphabetKeyboardLayout(
                 else -> item
             }
             KeyboardButton(item, { onKeyInsert(latexCmd, 0) }, Modifier.weight(1f), fontSize = 16)
-        }
-    }
-
-    // Row 5: 123..., ←, →, ↵, ⌫, Send
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        KeyboardButton("123...", onSwitchPage, Modifier.weight(1.2f), containerColor = darkBg, isBold = true, fontSize = 15)
-        KeyboardButton("←", { onMoveCursor(-1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("→", { onMoveCursor(1) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("↵", { onKeyInsert("\n", 0) }, Modifier.weight(1f), containerColor = darkBg)
-
-        // Delete button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(darkBg)
-                .clickable { onBackspace() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Backspace",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        // Send button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .weight(1.5f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(actionBg)
-                .clickable { onSolve() }
-                .padding(vertical = 12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Solve",
-                tint = actionText,
-                modifier = Modifier.size(20.dp)
-            )
         }
     }
 }

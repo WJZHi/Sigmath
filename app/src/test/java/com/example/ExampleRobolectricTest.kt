@@ -50,7 +50,7 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("Math Solver", appName)
+    assertEquals("Sigmath", appName)
   }
 
   @Test
@@ -115,6 +115,25 @@ class ExampleRobolectricTest {
             throw t
         }
     }
+  }
+
+  @Test
+  fun testPercentageAndModulo() {
+      val userExpression = "(7^{2}-\\sqrt{9})÷\\frac{6}{2}+5%"
+      val result = MathSolver.solve(userExpression)
+      println("User expression exact result: ${result.exactResultLaTeX}, decimal: ${result.decimalResult}")
+      // (49 - 3) / 3 + 5% = 46/3 + 1/20 = 923/60 ≈ 15.383333
+      assertEquals("\\frac{923}{60}", result.exactResultLaTeX)
+      
+      // Modulo test: 10 % 3 = 1
+      val modResult = MathSolver.solve("10 % 3")
+      println("Mod result exact: ${modResult.exactResultLaTeX}, decimal: ${modResult.decimalResult}")
+      assertEquals("1", modResult.exactResultLaTeX)
+      
+      // Postfix percentage: 50%
+      val percentResult = MathSolver.solve("50%")
+      println("50% result: ${percentResult.exactResultLaTeX}")
+      assertEquals("\\frac{1}{2}", percentResult.exactResultLaTeX)
   }
 }
 
