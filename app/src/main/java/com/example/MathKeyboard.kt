@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
@@ -34,7 +36,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -703,16 +711,19 @@ fun MathKeyboard(
             onMoveCursor = { dir -> handleMoveCursor(dir) },
             onKeyInsert = { txt, shift -> handleInsert(txt, shift) },
             onBackspace = { handleBackspace() },
+            onAC = { handleAC() },
             onSolve = onSolve
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FixedBottomActionRow(
     onMoveCursor: (Int) -> Unit,
     onKeyInsert: (String, Int) -> Unit,
     onBackspace: () -> Unit,
+    onAC: () -> Unit,
     onSolve: () -> Unit
 ) {
     val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -728,14 +739,17 @@ private fun FixedBottomActionRow(
         KeyboardButton("→", { onMoveCursor(1) }, Modifier.weight(1f), containerColor = darkBg)
         KeyboardButton("↵", { onKeyInsert("\n", 0) }, Modifier.weight(1f), containerColor = darkBg)
 
-        // Delete button
+        // Delete button (click = backspace, long-click = clear all)
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(darkBg)
-                .clickable { onBackspace() }
+                .combinedClickable(
+                    onClick = { onBackspace() },
+                    onLongClick = { onAC() }
+                )
                 .padding(vertical = 12.dp)
         ) {
             Icon(
@@ -802,6 +816,132 @@ private fun RenderKeyboardPage(
     }
 }
 
+@Composable
+fun DottedSquareIcon(
+    modifier: Modifier = Modifier.size(13.dp),
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(
+            width = 1.3.dp.toPx(),
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.2.dp.toPx(), 2.4.dp.toPx()), 0f)
+        )
+        drawRoundRect(
+            color = color,
+            size = size,
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+            style = stroke
+        )
+    }
+}
+
+@Composable
+fun BracketWithSquareContent(
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = "(",
+            color = color,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Normal,
+            fontFamily = FontFamily.SansSerif
+        )
+        DottedSquareIcon(modifier = Modifier.size(12.dp), color = color)
+        Text(
+            text = ")",
+            color = color,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Normal,
+            fontFamily = FontFamily.SansSerif
+        )
+    }
+}
+
+@Composable
+fun FractionSquareContent(
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        DottedSquareIcon(modifier = Modifier.size(10.dp), color = color)
+        Spacer(modifier = Modifier.height(2.dp))
+        Box(
+            modifier = Modifier
+                .width(16.dp)
+                .height(1.5.dp)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        DottedSquareIcon(modifier = Modifier.size(10.dp), color = color)
+    }
+}
+
+@Composable
+fun SqrtSquareContent(
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Canvas(modifier = Modifier.size(width = 24.dp, height = 22.dp)) {
+            val stroke = Stroke(width = 1.6.dp.toPx())
+            val path = Path().apply {
+                moveTo(2.dp.toPx(), 13.dp.toPx())
+                lineTo(5.dp.toPx(), 13.dp.toPx())
+                lineTo(8.5.dp.toPx(), 19.dp.toPx())
+                lineTo(13.dp.toPx(), 4.dp.toPx())
+                lineTo(size.width, 4.dp.toPx())
+            }
+            drawPath(path = path, color = color, style = stroke)
+
+            val dashStroke = Stroke(
+                width = 1.2.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx()), 0f)
+            )
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(12.5.dp.toPx(), 7.dp.toPx()),
+                size = Size(10.dp.toPx(), 11.dp.toPx()),
+                cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
+                style = dashStroke
+            )
+        }
+    }
+}
+
+@Composable
+fun PowerSquareContent(
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        modifier = Modifier.padding(top = 2.dp)
+    ) {
+        DottedSquareIcon(
+            modifier = Modifier
+                .size(13.dp)
+                .align(Alignment.CenterVertically),
+            color = color
+        )
+        Text(
+            text = "2",
+            color = color,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Normal,
+            fontFamily = FontFamily.SansSerif,
+            modifier = Modifier.offset(y = (-4).dp)
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KeyboardButton(
@@ -809,10 +949,12 @@ fun KeyboardButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
-    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant,
-    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
     isBold: Boolean = false,
-    fontSize: Int = 18
+    fontSize: Int = 19,
+    hasRedDot: Boolean = false,
+    customContent: (@Composable () -> Unit)? = null
 ) {
     Box(
         contentAlignment = Alignment.Center,
@@ -825,14 +967,29 @@ fun KeyboardButton(
             )
             .padding(vertical = 12.dp)
     ) {
-        Text(
-            text = text,
-            color = textColor,
-            fontSize = fontSize.sp,
-            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
-            fontFamily = FontFamily.SansSerif,
-            textAlign = TextAlign.Center
-        )
+        if (customContent != null) {
+            customContent()
+        } else {
+            Text(
+                text = text,
+                color = textColor,
+                fontSize = fontSize.sp,
+                fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                fontFamily = FontFamily.SansSerif,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        if (hasRedDot) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 3.dp, end = 3.dp)
+                    .size(4.5.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFC02626))
+            )
+        }
     }
 }
 
@@ -847,11 +1004,13 @@ fun PopupOptionButton(
     options: List<String>,
     onOptionSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
-    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
     isBold: Boolean = false,
-    fontSize: Int = 18,
+    fontSize: Int = 19,
     popupYOffsetDp: Int = -60,
+    hasRedDot: Boolean = true,
+    customContent: (@Composable () -> Unit)? = null,
     onPopupStateChanged: ((Boolean) -> Unit)? = null
 ) {
     val currentOnOptionSelected by rememberUpdatedState(onOptionSelected)
@@ -910,14 +1069,29 @@ fun PopupOptionButton(
                 .background(containerColor)
                 .padding(vertical = 12.dp)
         ) {
-            Text(
-                text = defaultText,
-                color = textColor,
-                fontSize = fontSize.sp,
-                fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
-                fontFamily = FontFamily.SansSerif,
-                textAlign = TextAlign.Center
-            )
+            if (customContent != null) {
+                customContent()
+            } else {
+                Text(
+                    text = defaultText,
+                    color = textColor,
+                    fontSize = fontSize.sp,
+                    fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.SansSerif,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            if (hasRedDot) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 3.dp, end = 3.dp)
+                        .size(4.5.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFC02626))
+                )
+            }
         }
 
         if (showPopup) {
@@ -977,34 +1151,46 @@ fun ColumnScope.BasicKeyboardLayout(
     onAC: () -> Unit,
     onPopupStateChanged: ((Boolean) -> Unit)? = null
 ) {
-    val darkBg = MaterialTheme.colorScheme.surfaceContainerHigh
+    val numBg = MaterialTheme.colorScheme.surfaceContainerHigh
+    val funcBg = MaterialTheme.colorScheme.surface
 
-    // Row 1: AC, %, 7, 8, 9, ÷
+    // Row 1: AC, ( ⬚ ), 7, 8, 9, ÷
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        KeyboardButton("AC", onAC, Modifier.weight(1f), containerColor = darkBg, isBold = true)
-        KeyboardButton("%", { onKeyInsert("%", 0) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("7", { onKeyInsert("7", 0) }, Modifier.weight(1f))
-        KeyboardButton("8", { onKeyInsert("8", 0) }, Modifier.weight(1f))
-        KeyboardButton("9", { onKeyInsert("9", 0) }, Modifier.weight(1f))
-        KeyboardButton("÷", { onKeyInsert(" ÷ ", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton(
+            text = "AC",
+            onClick = onAC,
+            modifier = Modifier.weight(1f),
+            containerColor = funcBg,
+            isBold = true,
+            fontSize = 18
+        )
+        KeyboardButton(
+            text = "( )",
+            onClick = onSmartBracket,
+            customContent = { BracketWithSquareContent() },
+            modifier = Modifier.weight(1f),
+            containerColor = funcBg
+        )
+        KeyboardButton("7", { onKeyInsert("7", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("8", { onKeyInsert("8", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("9", { onKeyInsert("9", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("÷", { onKeyInsert(" ÷ ", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
     }
 
-    // Row 2: x, √, 4, 5, 6, ×
+    // Row 2: ⬚/⬚, √⬚, 4, 5, 6, ×
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        PopupOptionButton(
-            defaultText = "x",
-            options = remember { listOf("x", "y", "z", "a", "b", "c") },
-            onOptionSelected = { option -> onKeyInsert(option, 0) },
-            onPopupStateChanged = onPopupStateChanged,
+        KeyboardButton(
+            text = "⬚/⬚",
+            onClick = { onKeyInsert("\\frac{}{}", -3) },
+            customContent = { FractionSquareContent() },
             modifier = Modifier.weight(1f),
-            containerColor = darkBg,
-            isBold = true
+            containerColor = funcBg
         )
         PopupOptionButton(
             defaultText = "√",
@@ -1018,73 +1204,85 @@ fun ColumnScope.BasicKeyboardLayout(
                     else -> onKeyInsert("\\sqrt{}", -1)
                 }
             },
+            hasRedDot = true,
+            customContent = { SqrtSquareContent() },
             onPopupStateChanged = onPopupStateChanged,
             modifier = Modifier.weight(1f),
-            containerColor = darkBg,
-            isBold = true
+            containerColor = funcBg
         )
-        KeyboardButton("4", { onKeyInsert("4", 0) }, Modifier.weight(1f))
-        KeyboardButton("5", { onKeyInsert("5", 0) }, Modifier.weight(1f))
-        KeyboardButton("6", { onKeyInsert("6", 0) }, Modifier.weight(1f))
-        KeyboardButton("×", { onKeyInsert(" × ", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton("4", { onKeyInsert("4", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("5", { onKeyInsert("5", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("6", { onKeyInsert("6", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("×", { onKeyInsert(" × ", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
     }
 
-    // Row 3: ^2, fraction, 1, 2, 3, -
+    // Row 3: ⬚², x, 1, 2, 3, -
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         PopupOptionButton(
-            defaultText = "x²",
-            options = remember { listOf("x²", "x³", "xⁿ") },
+            defaultText = "⬚²",
+            options = remember { listOf("⬚²", "⬚³", "⬚ⁿ", "⬚₂", "⬚ₙ") },
             onOptionSelected = { option ->
                 when (option) {
-                    "x²" -> onKeyInsert("^{2}", 0)
-                    "x³" -> onKeyInsert("^{3}", 0)
-                    "xⁿ" -> onKeyInsert("^{}", -1)
+                    "⬚²" -> onKeyInsert("^{2}", 0)
+                    "⬚³" -> onKeyInsert("^{3}", 0)
+                    "⬚ⁿ" -> onKeyInsert("^{}", -1)
+                    "⬚₂" -> onKeyInsert("_{2}", 0)
+                    "⬚ₙ" -> onKeyInsert("_{}", -1)
                     else -> onKeyInsert("^{2}", 0)
                 }
             },
+            hasRedDot = true,
+            customContent = { PowerSquareContent() },
             onPopupStateChanged = onPopupStateChanged,
             modifier = Modifier.weight(1f),
-            containerColor = darkBg,
-            isBold = true
+            containerColor = funcBg
         )
-        KeyboardButton("□/□", { onKeyInsert("\\frac{}{}", -3) }, Modifier.weight(1f), containerColor = darkBg)
-        KeyboardButton("1", { onKeyInsert("1", 0) }, Modifier.weight(1f))
-        KeyboardButton("2", { onKeyInsert("2", 0) }, Modifier.weight(1f))
-        KeyboardButton("3", { onKeyInsert("3", 0) }, Modifier.weight(1f))
-        KeyboardButton("-", { onKeyInsert(" - ", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        PopupOptionButton(
+            defaultText = "x",
+            options = remember { listOf("x", "y", "z", "a", "b", "c", "t") },
+            onOptionSelected = { option -> onKeyInsert(option, 0) },
+            hasRedDot = true,
+            onPopupStateChanged = onPopupStateChanged,
+            modifier = Modifier.weight(1f),
+            containerColor = funcBg,
+            fontSize = 20
+        )
+        KeyboardButton("1", { onKeyInsert("1", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("2", { onKeyInsert("2", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("3", { onKeyInsert("3", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton("-", { onKeyInsert(" - ", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
     }
 
-    // Row 4: ( ), 0, ., =, +
+    // Row 4: π, %, 0, ., =, +
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        KeyboardButton(
-            text = "( )",
-            onClick = onSmartBracket,
-            modifier = Modifier.weight(1f),
-            containerColor = darkBg,
-            isBold = true
-        )
-        KeyboardButton("0", { onKeyInsert("0", 0) }, Modifier.weight(2f))
         PopupOptionButton(
-            defaultText = ".",
-            options = remember { listOf(".", ",", ";") },
+            defaultText = "π",
+            options = remember { listOf("π", "e", "i", "∞", "°") },
             onOptionSelected = { option ->
                 when (option) {
-                    "." -> onKeyInsert(".", 0)
-                    "," -> onKeyInsert(",", 0)
-                    ";" -> onKeyInsert(";", 0)
-                    else -> onKeyInsert(".", 0)
+                    "π" -> onKeyInsert("\\pi", 0)
+                    "e" -> onKeyInsert("e", 0)
+                    "i" -> onKeyInsert("i", 0)
+                    "∞" -> onKeyInsert("\\infty", 0)
+                    "°" -> onKeyInsert("°", 0)
+                    else -> onKeyInsert("\\pi", 0)
                 }
             },
+            hasRedDot = true,
             onPopupStateChanged = onPopupStateChanged,
             modifier = Modifier.weight(1f),
-            isBold = true
+            containerColor = funcBg,
+            fontSize = 20
         )
+        KeyboardButton("%", { onKeyInsert("%", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
+        KeyboardButton("0", { onKeyInsert("0", 0) }, Modifier.weight(1f), containerColor = numBg, fontSize = 20)
+        KeyboardButton(".", { onKeyInsert(".", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
         PopupOptionButton(
             defaultText = "=",
             options = remember { listOf("=", "≠") },
@@ -1095,12 +1293,13 @@ fun ColumnScope.BasicKeyboardLayout(
                     else -> onKeyInsert(" = ", 0)
                 }
             },
+            hasRedDot = true,
             onPopupStateChanged = onPopupStateChanged,
             modifier = Modifier.weight(1f),
-            containerColor = darkBg,
-            isBold = true
+            containerColor = funcBg,
+            fontSize = 20
         )
-        KeyboardButton("+", { onKeyInsert(" + ", 0) }, Modifier.weight(1f), containerColor = darkBg)
+        KeyboardButton("+", { onKeyInsert(" + ", 0) }, Modifier.weight(1f), containerColor = funcBg, fontSize = 20)
     }
 }
 
@@ -1118,12 +1317,11 @@ fun ColumnScope.AdvancedKeyboardLayout(
     ) {
         PopupOptionButton(
             defaultText = "<",
-            options = remember { listOf("<", "≤", "≠") },
+            options = remember { listOf("<", "≤") },
             onOptionSelected = { option ->
                 when (option) {
                     "<" -> onKeyInsert(" < ", 0)
                     "≤" -> onKeyInsert(" \\le ", 0)
-                    "≠" -> onKeyInsert(" \\neq ", 0)
                     else -> onKeyInsert(" < ", 0)
                 }
             },
@@ -1134,12 +1332,11 @@ fun ColumnScope.AdvancedKeyboardLayout(
         )
         PopupOptionButton(
             defaultText = ">",
-            options = remember { listOf(">", "≥", "≠") },
+            options = remember { listOf(">", "≥") },
             onOptionSelected = { option ->
                 when (option) {
                     ">" -> onKeyInsert(" > ", 0)
                     "≥" -> onKeyInsert(" \\ge ", 0)
-                    "≠" -> onKeyInsert(" \\neq ", 0)
                     else -> onKeyInsert(" > ", 0)
                 }
             },
